@@ -1,0 +1,8 @@
+node_modules
+dist
+.DS_Store
+*.log
+test-app/build
+test-app/.dart_tool
+test-app/.flutter-plugins
+test-app/.flutter-plugins-dependencies
