@@ -3,16 +3,14 @@
   "version": "1.0.0",
   "description": "",
   "type": "module",
-  "main": "dist/index.js",
+  "main": "dist/src/index.js",
   "scripts": {
-    "build": "tsc",
-    "start": "node dist/index.js",
-    "watch": "tsc --watch"
+    "build": "rm -rf dist && tsc",
+    "start": "node dist/src/index.js",
+    "watch": "tsc --watch",
+    "verify": "node dist/verification/verify.js"
   },
   "keywords": [],
-  "author": "",
-  "license": "ISC",
-  "type": "commonjs",
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.25.0",
     "execa": "^9.6.1",
