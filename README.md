@@ -23,7 +23,7 @@ Add to your MCP Client configuration (e.g., `claude_desktop_config.json`):
   "mcpServers": {
     "flutter-pilot": {
       "command": "node",
-      "args": ["/path/to/flutter-test-pilot-mcp/dist/index.js"]
+      "args": ["/path/to/flutter-test-pilot-mcp/dist/src/index.js"]
     }
   }
 }
@@ -31,6 +31,7 @@ Add to your MCP Client configuration (e.g., `claude_desktop_config.json`):
 
 ## Tools
 
+- `validate_project`: Checks project prerequisites (dependencies, entitlements) and can `auto_fix` them.
 - `start_app`: Injects the harness and starts the app.
 - `tap`: Tap a widget.
 - `enter_text`: Enter text.

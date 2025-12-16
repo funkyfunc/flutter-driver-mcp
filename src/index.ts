@@ -136,15 +136,27 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
         },
       },
       {
+        name: "validate_project",
+        description: "Checks and optionally fixes project prerequisites (dependencies, permissions).",
+        inputSchema: {
+          type: "object",
+          properties: {
+            project_path: { type: "string", description: "Absolute path to the Flutter project root" },
+            auto_fix: { type: "boolean", description: "Whether to automatically apply fixes" },
+          },
+          required: ["project_path"],
+        },
+      },
+      {
         name: "tap",
         description: "Taps on a widget identified by the finder.",
         inputSchema: {
           type: "object",
           properties: {
-            finderType: { 
-              type: "string", 
+            finderType: {
+              type: "string",
               enum: ["byKey", "byText", "byTooltip", "byType"],
-              description: "Type of finder to use" 
+              description: "Type of finder to use"
             },
             key: { type: "string", description: "Key value (for byKey)" },
             text: { type: "string", description: "Text to match (for byText)" },
@@ -161,10 +173,10 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
           type: "object",
           properties: {
             text: { type: "string", description: "Text to enter" },
-            finderType: { 
-              type: "string", 
+            finderType: {
+              type: "string",
               enum: ["byKey", "byText", "byTooltip", "byType"],
-              description: "Finder type" 
+              description: "Finder type"
             },
             key: { type: "string" },
             // Add other finder props if needed
@@ -178,10 +190,10 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
         inputSchema: {
           type: "object",
           properties: {
-            finderType: { 
-              type: "string", 
+            finderType: {
+              type: "string",
               enum: ["byKey", "byText", "byTooltip", "byType"],
-              description: "Finder type" 
+              description: "Finder type"
             },
             key: { type: "string" },
             text: { type: "string" },
@@ -197,10 +209,10 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
         inputSchema: {
           type: "object",
           properties: {
-            finderType: { 
-              type: "string", 
+            finderType: {
+              type: "string",
               enum: ["byKey", "byText", "byTooltip", "byType"],
-              description: "Finder type" 
+              description: "Finder type"
             },
             key: { type: "string" },
             text: { type: "string" },
@@ -225,6 +237,79 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
   const { name, arguments: args } = request.params;
 
   try {
+    if (name === "validate_project") {
+      const { project_path, auto_fix } = args as { project_path: string; auto_fix?: boolean };
+      const report: string[] = [];
+      let success = true;
+
+      // 1. Check pubspec.yaml
+      const pubspecPath = path.join(project_path, "pubspec.yaml");
+      try {
+        const pubspecContent = await fs.readFile(pubspecPath, "utf-8");
+        
+        const hasIntegrationTest = pubspecContent.includes("integration_test:");
+        const hasWebSocket = pubspecContent.includes("web_socket_channel:");
+        
+        if (!hasIntegrationTest) {
+            report.push("❌ Missing 'integration_test' in pubspec.yaml.");
+            success = false;
+            if (auto_fix) {
+                await execa("flutter", ["pub", "add", "integration_test", "--sdk=flutter"], { cwd: project_path });
+                report.push("✅ Added 'integration_test'.");
+            }
+        } else {
+            report.push("✅ 'integration_test' found.");
+        }
+
+        if (!hasWebSocket) {
+            report.push("❌ Missing 'web_socket_channel' in pubspec.yaml.");
+            success = false;
+            if (auto_fix) {
+                await execa("flutter", ["pub", "add", "web_socket_channel"], { cwd: project_path });
+                report.push("✅ Added 'web_socket_channel'.");
+            }
+        } else {
+            report.push("✅ 'web_socket_channel' found.");
+        }
+      } catch (e) {
+          report.push(`❌ Could not read pubspec.yaml: ${e}`);
+          success = false;
+      }
+
+      // 2. Check macOS entitlements (if macos folder exists)
+      const macosPath = path.join(project_path, "macos/Runner/DebugProfile.entitlements");
+      try {
+          await fs.access(macosPath); // Throws if not exists
+          
+          const entitlements = await fs.readFile(macosPath, "utf-8");
+          if (!entitlements.includes("com.apple.security.network.client")) {
+              report.push("❌ Missing 'com.apple.security.network.client' in DebugProfile.entitlements.");
+              success = false;
+              if (auto_fix) {
+                  const closingDictIndex = entitlements.lastIndexOf("</dict>");
+                  if (closingDictIndex !== -1) {
+                      const newContent = entitlements.slice(0, closingDictIndex) + 
+                                         "\t<key>com.apple.security.network.client</key>\n\t<true/>\n" + 
+                                         entitlements.slice(closingDictIndex);
+                      await fs.writeFile(macosPath, newContent);
+                      report.push("✅ Added network client entitlement to DebugProfile.entitlements.");
+                  } else {
+                      report.push("⚠️ Could not auto-fix entitlements (structure mismatch).");
+                  }
+              }
+          } else {
+              report.push("✅ macOS network client entitlement found.");
+          }
+      } catch (e) {
+          // Ignore if macos folder/file doesn't exist
+      }
+
+      return {
+          content: [{ type: "text", text: report.join("\n") }],
+          isError: !success && !auto_fix 
+      };
+    }
+
     if (name === "start_app") {
       const { project_path, device_id } = args as { project_path: string; device_id?: string };
       

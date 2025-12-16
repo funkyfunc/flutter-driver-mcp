@@ -8,7 +8,8 @@
     "build": "rm -rf dist && tsc",
     "start": "node dist/src/index.js",
     "watch": "tsc --watch",
-    "verify": "node dist/verification/verify.js"
+    "verify": "node dist/verification/verify.js",
+    "verify-validate": "node dist/verification/verify_validate.js"
   },
   "keywords": [],
   "dependencies": {
