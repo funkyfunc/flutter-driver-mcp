@@ -35,5 +35,7 @@ Add to your MCP Client configuration (e.g., `claude_desktop_config.json`):
 - `start_app`: Injects the harness and starts the app.
 - `tap`: Tap a widget.
 - `enter_text`: Enter text.
-- `get_widget_tree`: Get the UI state.
+- `scroll`: Scroll a widget.
+- `scroll_until_visible`: Scroll until a target is visible.
+- `get_widget_tree`: Get the UI state (supports `summaryOnly`).
 - `stop_app`: Stop the session.
