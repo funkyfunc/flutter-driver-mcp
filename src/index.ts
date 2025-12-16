@@ -8,6 +8,7 @@ import { WebSocketServer, WebSocket } from "ws";
 import { execa } from "execa";
 import fs from "fs/promises";
 import path from "path";
+import os from "os";
 import { getHarnessCode } from "./harness.js";
 
 // --- State ---
@@ -15,6 +16,7 @@ let activeProcess: any | null = null;
 let activeWs: WebSocket | null = null;
 let wsServer: WebSocketServer | null = null;
 let wsPort: number | null = null;
+let currentObservatoryUri: string | null = null;
 // Map request ID to promise resolvers
 const pendingRequests = new Map<
   string | number,
@@ -270,6 +272,21 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
           },
         },
       },
+      {
+        name: "take_screenshot",
+        description: "Captures a screenshot of the running app.",
+        inputSchema: {
+          type: "object",
+          properties: {
+            save_path: { type: "string", description: "Optional path to save the screenshot file (e.g. 'screenshot.png'). If not provided, returns base64." },
+            type: { 
+                type: "string", 
+                enum: ["device", "rasterizer", "skia"], 
+                description: "The type of screenshot to retrieve. Defaults to 'device'. 'rasterizer' is often better for specific views." 
+            }
+          },
+        },
+      },
     ],
   };
 });
@@ -345,6 +362,79 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           // Ignore if macos folder/file doesn't exist
       }
 
+      // 3. Check Android permissions (if android folder exists)
+      const androidDebugManifestPath = path.join(project_path, "android/app/src/debug/AndroidManifest.xml");
+      const androidMainManifestPath = path.join(project_path, "android/app/src/main/AndroidManifest.xml");
+      try {
+          // Check if android folder exists by trying to access main manifest
+          await fs.access(androidMainManifestPath);
+
+          let hasInternet = false;
+          
+          // Check main manifest
+          const mainManifest = await fs.readFile(androidMainManifestPath, "utf-8");
+          if (mainManifest.includes("android.permission.INTERNET")) {
+              hasInternet = true;
+          }
+
+          // Check debug manifest if not found in main
+          if (!hasInternet) {
+              try {
+                  const debugManifest = await fs.readFile(androidDebugManifestPath, "utf-8");
+                  if (debugManifest.includes("android.permission.INTERNET")) {
+                      hasInternet = true;
+                  }
+              } catch (e) {
+                  // Debug manifest might not exist
+              }
+          }
+
+          if (!hasInternet) {
+              report.push("❌ Missing 'android.permission.INTERNET' in AndroidManifest.xml (main or debug).");
+              success = false;
+              if (auto_fix) {
+                  // Try to add to debug manifest
+                  try {
+                      let debugManifest = "";
+                      try {
+                          debugManifest = await fs.readFile(androidDebugManifestPath, "utf-8");
+                      } catch (e) {
+                          // Create if doesn't exist (basic template)
+                          debugManifest = '<manifest xmlns:android="http://schemas.android.com/apk/res/android" package="com.example.app">\n</manifest>';
+                          const debugDir = path.dirname(androidDebugManifestPath);
+                          await fs.mkdir(debugDir, { recursive: true });
+                      }
+
+                      if (debugManifest.includes("</manifest>")) {
+                          const newContent = debugManifest.replace(
+                              "</manifest>",
+                              '    <uses-permission android:name="android.permission.INTERNET"/>\n</manifest>'
+                          );
+                          await fs.writeFile(androidDebugManifestPath, newContent);
+                          report.push("✅ Added INTERNET permission to debug AndroidManifest.xml.");
+                      } else {
+                          report.push("⚠️ Could not auto-fix AndroidManifest.xml (structure mismatch).");
+                      }
+                  } catch (e) {
+                      report.push(`⚠️ Failed to auto-fix Android permissions: ${e}`);
+                  }
+              }
+          } else {
+              report.push("✅ Android INTERNET permission found.");
+          }
+      } catch (e) {
+          // Ignore if android folder doesn't exist
+      }
+
+      // 4. Check Web (if web folder exists)
+      const webIndexPath = path.join(project_path, "web/index.html");
+      try {
+          await fs.access(webIndexPath);
+          report.push("✅ Web index.html found.");
+      } catch (e) {
+          // Ignore if web folder doesn't exist or isn't a web project
+      }
+
       return {
           content: [{ type: "text", text: report.join("\n") }],
           isError: !success && !auto_fix 
@@ -354,6 +444,9 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
     if (name === "start_app") {
       const { project_path, device_id } = args as { project_path: string; device_id?: string };
       
+      // Reset state
+      currentObservatoryUri = null;
+
       // 1. Start WS Server
       const port = await startWsServer();
       
@@ -370,10 +463,10 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       
       // 3. Spawn Flutter Process
       const flutterArgs = [
-        "test",
-        "integration_test/mcp_harness.dart",
-        "--dart-define", `WS_URL=ws://localhost:${port}`,
-        "--reporter", "json"
+        "run", // Use 'run' instead of 'test' to get observatory URI and support hot restart
+        "--machine",
+        "--target", "integration_test/mcp_harness.dart",
+        "--dart-define", `WS_URL=ws://localhost:${port}`
       ];
       
       if (device_id) {
@@ -392,14 +485,36 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       });
       activeProcess.catch((e: any) => {}); // Prevent unhandled rejection
       
-      // Stream logs
-      activeProcess.stdout?.on("data", (chunk: any) => console.error(`[Flutter]: ${chunk}`));
+      // Stream logs and parse for Observatory URI
+      activeProcess.stdout?.on("data", (chunk: any) => {
+          const str = chunk.toString();
+          console.error(`[Flutter]: ${str}`);
+          
+          // Parse JSON events from flutter run --machine
+          const lines = str.split("\n");
+          for (const line of lines) {
+              if (!line.trim().startsWith("[") && line.trim().startsWith("{")) {
+                  try {
+                      const event = JSON.parse(line);
+                      if (event.event === "app.debugPort") {
+                         if (event.params && event.params.wsUri) {
+                             currentObservatoryUri = event.params.wsUri;
+                             console.error(`Captured Observatory URI: ${currentObservatoryUri}`);
+                         }
+                      }
+                  } catch (e) {
+                      // ignore parse errors for non-json lines
+                  }
+              }
+          }
+      });
       activeProcess.stderr?.on("data", (chunk: any) => console.error(`[Flutter Err]: ${chunk}`));
 
       activeProcess.on("exit", (code: any) => {
         console.error(`Flutter process exited with code ${code}`);
         activeProcess = null;
         activeWs = null;
+        currentObservatoryUri = null;
       });
 
       // 4. Wait for connection
@@ -420,7 +535,66 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         activeProcess = null;
       }
       activeWs?.close();
+      currentObservatoryUri = null;
+      
+      // Clean up screenshots
+      const tempDir = path.join(os.tmpdir(), "flutter_pilot_screenshots");
+      try {
+          await fs.rm(tempDir, { recursive: true, force: true });
+      } catch (e) {
+          // ignore
+      }
+
       return { content: [{ type: "text", text: "App stopped." }] };
+    }
+
+    if (name === "take_screenshot") {
+        const { save_path, type = "device" } = args as { save_path?: string, type?: string };
+        
+        if (!activeProcess) {
+            throw new Error("App is not running. Use start_app first.");
+        }
+        if (!currentObservatoryUri) {
+            throw new Error("Observatory URI not available. Screenshot requires a debug/profile build with VM service enabled.");
+        }
+
+        const tempDir = path.join(os.tmpdir(), "flutter_pilot_screenshots");
+        await fs.mkdir(tempDir, { recursive: true });
+        const tempPath = path.join(tempDir, `screenshot_${Date.now()}.png`);
+
+        console.error(`Taking screenshot via: flutter screenshot --type=${type} --observatory-uri=${currentObservatoryUri} -o ${tempPath}`);
+        
+        try {
+            await execa("flutter", [
+                "screenshot",
+                `--type=${type}`,
+                "--observatory-uri=" + currentObservatoryUri,
+                "-o", tempPath
+            ]);
+
+            // Check if file exists
+            await fs.access(tempPath);
+
+            if (save_path) {
+                // Move/copy to requested path
+                await fs.copyFile(tempPath, save_path);
+                return { content: [{ type: "text", text: `Screenshot saved to ${save_path}` }] };
+            } else {
+                // Return base64
+                const buffer = await fs.readFile(tempPath);
+                const base64 = buffer.toString("base64");
+                // Cleanup temp file immediately if not saving
+                await fs.unlink(tempPath);
+                return { 
+                    content: [
+                        { type: "text", text: "Screenshot captured:" },
+                        { type: "image", data: base64, mimeType: "image/png" }
+                    ] 
+                };
+            }
+        } catch (e: any) {
+            throw new Error(`Failed to take screenshot: ${e.message} \nStderr: ${e.stderr}`);
+        }
     }
 
     if (name === "tap") {
