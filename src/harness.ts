@@ -14,7 +14,7 @@ class AmbiguousFinderException implements Exception {
   AmbiguousFinderException(this.message, this.matches);
 
   @override
-  String toString() => 'AmbiguousFinderException: \$message\\nMatches: \${jsonEncode(this.matches)}';
+  String toString() => 'AmbiguousFinderException: \$message\nMatches: \${jsonEncode(this.matches)}';
 }
 
 class _FinderResult {
@@ -35,7 +35,7 @@ void main() {
     await tester.pumpAndSettle();
 
     final wsUrl = const String.fromEnvironment('WS_URL', defaultValue: 'ws://localhost:8080');
-    print('MCP: Connecting to $wsUrl');
+    print('MCP: Connecting to \$wsUrl');
     
     // Simple retry logic
     IOWebSocketChannel? channel;
@@ -45,7 +45,7 @@ void main() {
         await channel.ready;
         break;
       } catch (e) {
-        print('MCP: Connection failed, retrying in 1s... $e');
+        print('MCP: Connection failed, retrying in 1s... \$e');
         await Future.delayed(const Duration(seconds: 1));
       }
     }
@@ -65,7 +65,7 @@ void main() {
     }));
 
     await for (final message in channel.stream) {
-      print('MCP: Received $message');
+      print('MCP: Received \$message');
       final map = jsonDecode(message as String) as Map<String, dynamic>;
       final id = map['id'];
       
@@ -97,7 +97,7 @@ void main() {
             await _handleWaitFor(tester, params);
             break;
           default:
-            throw 'Unknown method: $method';
+            throw 'Unknown method: \$method';
         }
         
         channel.sink.add(jsonEncode({
@@ -106,7 +106,7 @@ void main() {
           'result': result ?? {'status': 'success'},
         }));
       } catch (e, stack) {
-        print('MCP: Error: $e');
+        print('MCP: Error: \$e');
         channel.sink.add(jsonEncode({
           'jsonrpc': '2.0',
           'id': id,
@@ -148,21 +148,59 @@ _FinderResult _createFinder(Map<String, dynamic> params) {
       finder = find.byWidgetPredicate((widget) => widget.runtimeType.toString() == params['type']);
       break;
     default:
-      throw 'Unsupported finder type: $finderType';
+      throw 'Unsupported finder type: \$finderType';
   }
 
   final elements = finder.evaluate().toList();
   if (elements.isEmpty) {
-    throw 'WidgetNotFoundException: No widget found with type "$finderType" and params "$params"';
+    throw 'WidgetNotFoundException: No widget found with type "\$finderType" and params "\$params"';
   } else if (elements.length > 1) {
     final matches = elements.map((e) => _serializeElement(e, summaryOnly: true)).toList();
     throw AmbiguousFinderException(
-      'Too many elements found for finder type "$finderType" with params "$params". '
+      'Too many elements found for finder type "\$finderType" with params "\$params". '
       'Consider using a more specific finder or adding a key.',
       matches,
     );
   }
   return _FinderResult(finder, elements);
+}
+
+// Special version of createFinder that DOES NOT throw if empty, 
+// useful for scroll_until_visible which expects the widget might be offscreen/lazy loaded?
+// Actually scrollUntilVisible needs the widget to be in the tree (even if offscreen).
+// If it's lazy loaded (e.g. ListView.builder), it MIGHT NOT BE IN THE TREE yet.
+// In that case, flutter_test's scrollUntilVisible iterates until it finds it.
+// So we MUST NOT evaluate/throw if empty for scrollUntilVisible target.
+Finder _createLazyFinder(Map<String, dynamic> params) {
+  final finderType = params['finderType'] as String?;
+  if (finderType == null) throw 'finderType is required';
+
+  Finder finder;
+  switch (finderType) {
+    case 'byKey':
+      finder = find.byKey(Key(params['key'] as String));
+      break;
+    case 'byValueKey':
+      final keyVal = params['key'];
+      if (keyVal is int) {
+         finder = find.byKey(ValueKey<int>(keyVal));
+      } else {
+        finder = find.byKey(ValueKey<String>(keyVal.toString()));
+      }
+      break;
+    case 'byText':
+      finder = find.text(params['text'] as String);
+      break;
+    case 'byTooltip':
+      finder = find.byTooltip(params['tooltip'] as String);
+      break;
+    case 'byType':
+      finder = find.byWidgetPredicate((widget) => widget.runtimeType.toString() == params['type']);
+      break;
+    default:
+      throw 'Unsupported finder type: \$finderType';
+  }
+  return finder;
 }
 
 Future<void> _handleTap(WidgetTester tester, Map<String, dynamic> params) async {
@@ -187,11 +225,13 @@ Future<void> _handleScroll(WidgetTester tester, Map<String, dynamic> params) asy
 }
 
 Future<void> _handleScrollUntilVisible(WidgetTester tester, Map<String, dynamic> params) async {
-  final targetResult = _createFinder(params); // The target widget to find
+  // Use _createLazyFinder so we don't throw if it's not currently in the tree (lazy list)
+  final targetFinder = _createLazyFinder(params);
   
   // Handle optional scrollable finder
   Finder scrollableFinder;
   if (params['scrollable'] != null) {
+    // For the scrollable itself, it MUST exist.
     final scrollableParams = params['scrollable'] as Map<String, dynamic>;
     final scrollableResult = _createFinder(scrollableParams);
     scrollableFinder = scrollableResult.finder;
@@ -199,26 +239,37 @@ Future<void> _handleScrollUntilVisible(WidgetTester tester, Map<String, dynamic>
     scrollableFinder = find.byType(Scrollable);
   }
 
-  final delta = (params['dy'] as num?)?.toDouble() ?? -50.0; // Default scroll step
+  final delta = (params['dy'] as num?)?.toDouble() ?? -50.0; 
       
-  await tester.scrollUntilVisible(
-    targetResult.finder,
-    delta.abs(), // distance to scroll on each attempt
-    scrollable: scrollableFinder,
-    // maxScrolls: 50, // Safety limit is handled by default in flutter_test
-    // alignment: 0.0, // Default to 0.0 (top)
-  );
-  await tester.pumpAndSettle();
+  try {
+    await tester.scrollUntilVisible(
+      targetFinder,
+      delta.abs(), 
+      scrollable: scrollableFinder,
+    );
+    await tester.pumpAndSettle();
+  } catch (e) {
+    // If it failed, check if it was due to ambiguity
+    // We re-evaluate the finder to see what's happening
+    final elements = targetFinder.evaluate().toList();
+    if (elements.length > 1) {
+       final matches = elements.map((e) => _serializeElement(e, summaryOnly: true)).toList();
+       throw AmbiguousFinderException(
+         'Scroll failed due to ambiguity. Found \${elements.length} matches.',
+         matches,
+       );
+    }
+    rethrow;
+  }
 }
 
 Future<void> _handleWaitFor(WidgetTester tester, Map<String, dynamic> params) async {
-  final result = _createFinder(params); // This will throw if not found after evaluation
-  // If we reach here, the widget was found by _createFinder evaluation, so we are good.
-  // The original wait logic is still good for finding something that may appear later.
+  // waitFor implies it might not be there yet.
+  final finder = _createLazyFinder(params);
   final timeout = Duration(milliseconds: params['timeout'] as int? ?? 5000);
   final end = DateTime.now().add(timeout);
   while (DateTime.now().isBefore(end)) {
-    if (result.finder.evaluate().isNotEmpty) return;
+    if (finder.evaluate().isNotEmpty) return;
     await tester.pump(const Duration(milliseconds: 100));
   }
   throw 'Timeout waiting for widget';
@@ -235,13 +286,8 @@ Map<String, dynamic> _handleGetWidgetTree(Map<String, dynamic> params) {
 Map<String, dynamic> _serializeElement(Element element, {required bool summaryOnly}) {
   final children = <Map<String, dynamic>>[];
   
-  // Recursively serialize children first.
-  // This ensures that when we decide whether to "keep" a parent,
-  // we know if its children are going to be kept.
   element.visitChildren((child) {
     final serializedChild = _serializeElement(child, summaryOnly: summaryOnly);
-    // If the child is kept, add it.
-    // If the child is not kept but has its own children, promote its children.
     if (!summaryOnly || _shouldKeep(serializedChild)) {
       children.add(serializedChild);
     } else if (serializedChild.containsKey('children')) {
@@ -259,7 +305,6 @@ Map<String, dynamic> _serializeElement(Element element, {required bool summaryOn
   if (widget.key != null) {
     json['key'] = widget.key.toString();
   }
-  // Add specific properties for common interactive/content widgets
   if (widget is Text) {
     json['data'] = widget.data;
   } else if (widget is Tooltip) {
@@ -269,7 +314,7 @@ Map<String, dynamic> _serializeElement(Element element, {required bool summaryOn
   } else if (widget is Icon) {
     json['icon'] = widget.icon.toString();
   } else if (widget is Image) {
-    json['image'] = widget.image.toString(); // Or more detailed info
+    json['image'] = widget.image.toString(); 
   } else if (widget is GestureDetector) {
     json['onTap'] = widget.onTap != null;
   } else if (widget is InkWell) {
@@ -292,14 +337,13 @@ Map<String, dynamic> _serializeElement(Element element, {required bool summaryOn
 bool _shouldKeep(Map<String, dynamic> json) {
   final type = json['type'] as String;
   final hasKey = json.containsKey('key');
-  final hasData = json.containsKey('data'); // Text
-  final hasMessage = json.containsKey('message'); // Tooltip
-  final hasValue = json.containsKey('value'); // EditableText
-  final hasOnPressed = json.containsKey('onPressed'); // Buttons
+  final hasData = json.containsKey('data'); 
+  final hasMessage = json.containsKey('message'); 
+  final hasValue = json.containsKey('value'); 
+  final hasOnPressed = json.containsKey('onPressed'); 
   
   if (hasKey || hasData || hasMessage || hasValue || hasOnPressed) return true;
   
-  // List of widgets to "flatten" (remove from tree but keep children)
   const flattenWidgets = {
     'Container', 'Padding', 'Center', 'SizedBox', 'Align', 'Expanded', 'Flexible', 
     'Column', 'Row', 'Stack', 'ConstrainedBox', 'DecoratedBox', 'SafeArea', 
@@ -308,12 +352,11 @@ bool _shouldKeep(Map<String, dynamic> json) {
     'Material', 'Scaffold', 
     '_ViewScope', '_PipelineOwnerScope', '_MediaQueryFromView', 'MediaQuery', 'FocusTraversalGroup', 'Focus', 
     '_FocusInheritedScope', '_FocusScopeWithExternalFocusNode', '_RawViewInternal', 'RawView', 'View', 'RootWidget',
-    // Add specific types that are usually just wrappers unless they have a key or interact directly.
-    'GestureDetector', 'InkWell', // Flatten if no key/onTap/child that is kept
+    'GestureDetector', 'InkWell', 
   };
   
   if (flattenWidgets.contains(type)) return false;
   
   return true;
 }
-`
+`;
