@@ -216,6 +216,33 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
         },
       },
       {
+        name: "scroll_until_visible",
+        description: "Scrolls a scrollable widget until a target widget is visible.",
+        inputSchema: {
+          type: "object",
+          properties: {
+            finderType: {
+              type: "string",
+              enum: ["byKey", "byText", "byTooltip", "byType"],
+              description: "Finder type for the TARGET widget"
+            },
+            key: { type: "string" },
+            text: { type: "string" },
+            dy: { type: "number", description: "Vertical scroll delta per step (default 50.0)" },
+            scrollable: {
+                type: "object",
+                description: "Optional finder for the scrollable widget",
+                properties: {
+                    finderType: { type: "string", enum: ["byKey", "byType"] },
+                    key: { type: "string" },
+                    type: { type: "string" }
+                }
+            }
+          },
+          required: ["finderType"],
+        },
+      },
+      {
         name: "wait_for",
         description: "Waits for a widget to appear.",
         inputSchema: {
@@ -235,10 +262,12 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
       },
       {
         name: "get_widget_tree",
-        description: "Returns a simplified JSON representation of the widget tree.",
+        description: "Returns a JSON representation of the widget tree.",
         inputSchema: {
           type: "object",
-          properties: {},
+          properties: {
+            summaryOnly: { type: "boolean", description: "If true, returns a filtered tree hiding layout clutter (Container, Padding, etc.)" }
+          },
         },
       },
     ],
@@ -409,13 +438,18 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         return { content: [{ type: "text", text: JSON.stringify(result) }] };
     }
 
+    if (name === "scroll_until_visible") {
+        const result = await sendRpc("scroll_until_visible", args);
+        return { content: [{ type: "text", text: JSON.stringify(result) }] };
+    }
+
     if (name === "wait_for") {
         const result = await sendRpc("wait_for", args);
         return { content: [{ type: "text", text: JSON.stringify(result) }] };
     }
     
     if (name === "get_widget_tree") {
-        const result = await sendRpc("get_widget_tree", {});
+        const result = await sendRpc("get_widget_tree", args);
         return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
     }
 

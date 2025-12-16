@@ -9,7 +9,8 @@
     "start": "node dist/src/index.js",
     "watch": "tsc --watch",
     "verify": "node dist/verification/verify.js",
-    "verify-validate": "node dist/verification/verify_validate.js"
+    "verify-validate": "node dist/verification/verify_validate.js",
+    "verify-tools": "node dist/verification/verify_tools.js"
   },
   "keywords": [],
   "dependencies": {

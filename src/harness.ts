@@ -68,10 +68,13 @@ void main() {
             await _handleEnterText(tester, params);
             break;
           case 'get_widget_tree':
-            result = _handleGetWidgetTree();
+            result = _handleGetWidgetTree(params);
             break;
           case 'scroll':
             await _handleScroll(tester, params);
+            break;
+          case 'scroll_until_visible':
+            await _handleScrollUntilVisible(tester, params);
             break;
           case 'wait_for':
             await _handleWaitFor(tester, params);
@@ -109,7 +112,6 @@ Finder _createFinder(Map<String, dynamic> params) {
     case 'byKey':
       return find.byKey(Key(params['key'] as String));
     case 'byValueKey':
-      // Check if the key is an int or string
       final keyVal = params['key'];
       if (keyVal is int) {
          return find.byKey(ValueKey<int>(keyVal));
@@ -120,12 +122,6 @@ Finder _createFinder(Map<String, dynamic> params) {
     case 'byTooltip':
       return find.byTooltip(params['tooltip'] as String);
     case 'byType':
-      // This is tricky as we need the Type object. 
-      // Simplified: matches string runtimeType.
-      // For exact matches, we might need a more complex mapping or rely on semantics.
-      // Fallback to searching by semantic label if type lookup fails or just throw.
-      // A safe bet for generic strings is hard in Dart without reflection.
-      // We will look for widgets where runtimeType.toString() matches.
       return find.byWidgetPredicate((widget) => widget.runtimeType.toString() == params['type']);
     default:
       throw 'Unsupported finder type: \$finderType';
@@ -153,10 +149,26 @@ Future<void> _handleScroll(WidgetTester tester, Map<String, dynamic> params) asy
   await tester.pumpAndSettle();
 }
 
+Future<void> _handleScrollUntilVisible(WidgetTester tester, Map<String, dynamic> params) async {
+  final finder = _createFinder(params);
+  // Default to scrolling down 500px in steps of 50
+  final delta = (params['dy'] as num?)?.toDouble() ?? -500.0; 
+  final scrollable = params['scrollable'] != null 
+      ? _createFinder(params['scrollable']) 
+      : find.byType(Scrollable);
+      
+  await tester.scrollUntilVisible(
+    finder,
+    50.0, // delta step
+    scrollable: scrollable,
+    maxScrolls: 50, // Safety limit
+  );
+  await tester.pumpAndSettle();
+}
+
 Future<void> _handleWaitFor(WidgetTester tester, Map<String, dynamic> params) async {
   final finder = _createFinder(params);
   final timeout = Duration(milliseconds: params['timeout'] as int? ?? 5000);
-  // Custom wait loop since integration_test wait might be different
   final end = DateTime.now().add(timeout);
   while (DateTime.now().isBefore(end)) {
     if (finder.evaluate().isNotEmpty) return;
@@ -165,33 +177,33 @@ Future<void> _handleWaitFor(WidgetTester tester, Map<String, dynamic> params) as
   throw 'Timeout waiting for widget';
 }
 
-Map<String, dynamic> _handleGetWidgetTree() {
-  // Simple serialization of the semantic tree or widget tree
-  // Using debugDumpApp() via string is messy. 
-  // Let's traverse the Element tree for a simplified view.
-  // Or even better, use the Semantics tree which is cleaner for LLMs.
-  
-  // For now, let's return a basic summary.
-  // Ideally, we'd use a visitor to build a JSON.
-  
-  // Implementation note: Accessing the element tree directly in a test
-  // is possible via WidgetsBinding.instance.rootElement
-  
+Map<String, dynamic> _handleGetWidgetTree(Map<String, dynamic> params) {
   final root = WidgetsBinding.instance.rootElement;
   if (root == null) return {'error': 'No root element'};
   
-  return _serializeElement(root);
+  final summaryOnly = params['summaryOnly'] == true;
+  return _serializeElement(root, summaryOnly: summaryOnly);
 }
 
-Map<String, dynamic> _serializeElement(Element element) {
+Map<String, dynamic> _serializeElement(Element element, {required bool summaryOnly}) {
   final children = <Map<String, dynamic>>[];
   element.visitChildren((child) {
-    children.add(_serializeElement(child));
+    
+    final serializedChild = _serializeElement(child, summaryOnly: summaryOnly);
+    if (!summaryOnly || _shouldKeep(serializedChild)) {
+       children.add(serializedChild);
+    } else if (serializedChild.containsKey('children')) {
+       // If the node itself is filtered but has children, promote the children?
+       // This effectively removes the wrapper.
+       children.addAll((serializedChild['children'] as List).cast<Map<String, dynamic>>());
+    }
   });
 
   final widget = element.widget;
+  final type = widget.runtimeType.toString();
+  
   final json = <String, dynamic>{
-    'type': widget.runtimeType.toString(),
+    'type': type,
   };
 
   if (widget is Text) {
@@ -199,7 +211,6 @@ Map<String, dynamic> _serializeElement(Element element) {
   } else if (widget is Tooltip) {
     json['message'] = widget.message;
   }
-  // Add other relevant properties as needed (keys, specific fields)
   if (widget.key != null) {
     json['key'] = widget.key.toString();
   }
@@ -210,4 +221,28 @@ Map<String, dynamic> _serializeElement(Element element) {
   
   return json;
 }
-`
+
+bool _shouldKeep(Map<String, dynamic> json) {
+  final type = json['type'] as String;
+  final hasKey = json.containsKey('key');
+  final hasData = json.containsKey('data'); // Text
+  final hasMessage = json.containsKey('message'); // Tooltip
+  
+  if (hasKey || hasData || hasMessage) return true;
+  
+  // List of widgets to "flatten" (remove from tree but keep children)
+  const flattenWidgets = {
+    'Container', 'Padding', 'Center', 'SizedBox', 'Align', 'Expanded', 'Flexible', 
+    'Column', 'Row', 'Stack', 'ConstrainedBox', 'DecoratedBox', 'SafeArea', 
+    'SingleChildScrollView', 'Scrollable', 'GestureDetector', 'InkWell',
+    'Semantics', 'ExcludeSemantics', 'MergeSemantics',
+    'Material', 'Scaffold', 
+    '_ViewScope', '_PipelineOwnerScope', '_MediaQueryFromView', 'MediaQuery', 'FocusTraversalGroup', 'Focus', 
+    '_FocusInheritedScope', '_FocusScopeWithExternalFocusNode', '_RawViewInternal', 'RawView', 'View', 'RootWidget'
+  };
+  
+  if (flattenWidgets.contains(type)) return false;
+  
+  return true;
+}
+`;
