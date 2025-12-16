@@ -14,7 +14,7 @@ class AmbiguousFinderException implements Exception {
   AmbiguousFinderException(this.message, this.matches);
 
   @override
-  String toString() => 'AmbiguousFinderException: \$message\nMatches: \${jsonEncode(this.matches)}';
+  String toString() => 'AmbiguousFinderException: \$message\\nMatches: \${jsonEncode(this.matches)}';
 }
 
 class _FinderResult {
@@ -229,15 +229,14 @@ Future<void> _handleScrollUntilVisible(WidgetTester tester, Map<String, dynamic>
   final targetFinder = _createLazyFinder(params);
   
   // Handle optional scrollable finder
-  Finder scrollableFinder;
+  Finder? scrollableFinder;
   if (params['scrollable'] != null) {
     // For the scrollable itself, it MUST exist.
     final scrollableParams = params['scrollable'] as Map<String, dynamic>;
     final scrollableResult = _createFinder(scrollableParams);
     scrollableFinder = scrollableResult.finder;
-  } else {
-    scrollableFinder = find.byType(Scrollable);
   }
+  // If null, flutter_test will find the first ancestor scrollable.
 
   final delta = (params['dy'] as num?)?.toDouble() ?? -50.0; 
       
