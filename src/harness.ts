@@ -14,7 +14,9 @@ class AmbiguousFinderException implements Exception {
   AmbiguousFinderException(this.message, this.matches);
 
   @override
-  String toString() => 'AmbiguousFinderException: \$message\nMatches: \${jsonEncode(this.matches)}';
+  String toString() => '''AmbiguousFinderException: \$message
+Matches: 
+''';
 }
 
 class _FinderResult {

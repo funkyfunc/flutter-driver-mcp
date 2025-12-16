@@ -1,5 +1,5 @@
 {
-  "name": "flutter-test-pilot-mcp",
+  "name": "flutter-pilot-mcp",
   "version": "1.0.0",
   "description": "",
   "type": "module",
@@ -10,7 +10,8 @@
     "watch": "tsc --watch",
     "verify": "node dist/verification/verify.js",
     "verify-validate": "node dist/verification/verify_validate.js",
-    "verify-tools": "node dist/verification/verify_tools.js"
+    "verify-tools": "node dist/verification/verify_tools.js",
+    "verify-scroll": "node dist/verification/verify_scroll.js"
   },
   "keywords": [],
   "dependencies": {
