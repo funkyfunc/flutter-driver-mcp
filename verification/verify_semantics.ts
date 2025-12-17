@@ -48,20 +48,21 @@ server.stdout.on("data", (data) => {
 });
 
 function handleMessage(msg: any) {
+    console.log(`[Client] Handling message ID: ${msg.id}, Stage: ${stage}`);
     if (msg.error || (msg.result && msg.result.isError)) {
         console.error("Error received:", msg.error || msg.result);
         server.kill();
         process.exit(1);
     }
 
-    if (msg.result && msg.id === 1) { // start_app response
+    if (msg.result && msg.id === 2) { // start_app response (ID 2)
         console.log("App started. Reading logs first...");
         stage = "read_logs_initial";
         send("tools/call", {
             name: "read_logs",
             arguments: { lines: 10 }
         });
-    } else if (msg.result && msg.id === 2 && stage === "read_logs_initial") {
+    } else if (msg.result && msg.id === 3 && stage === "read_logs_initial") { // read_logs (ID 3)
         console.log("Logs received. Now fetching accessibility tree...");
         // console.log(msg.result.content[0].text);
         stage = "get_a11y";
@@ -69,44 +70,46 @@ function handleMessage(msg: any) {
             name: "get_accessibility_tree",
             arguments: {}
         });
-    } else if (msg.result && msg.id === 3 && stage === "get_a11y") {
-        console.log("Accessibility tree received:");
+    } else if (msg.result && msg.id === 4 && stage === "get_a11y") { // get_a11y (ID 4)
+        console.log("Accessibility tree received!");
         const treeJson = msg.result.content[0].text;
         // console.log(treeJson);
         const tree = JSON.parse(treeJson);
         
         // Basic assertion
         if (tree.id !== undefined && tree.rect !== undefined) {
-            console.log("✅ Verified: Root node has ID and Rect.");
+            console.log(`✅ Verified: Root node has ID (\${tree.id}) and Rect. Tree size: \${treeJson.length} chars.`);
+            console.log("!!! FULL SUCCESS !!!");
         } else {
             console.error("❌ Failed: Invalid accessibility tree structure.");
             console.error(treeJson);
             process.exit(1);
         }
 
-        console.log("Testing enter_text with action...");
-        stage = "enter_text_action";
-        // We'll target the app (maybe finding by type since we don't have known keys in the default template)
-        // Actually, the default template usually has a counter and maybe no text field.
-        // But we can try to send it anyway. If no widget found, it throws.
-        // Let's try to target 'MaterialApp' just to have a target, or maybe 'FloatingActionButton' which exists.
-        // enterText on FAB might not do anything but the command should reach harness.
-        // Wait, enterText requires a finder that finds an EditableText.
-        // The default app doesn't have a TextField.
-        // So we can't really test enter_text SUCCESS without adding a TextField.
-        // But we can test that it TRIES.
+        console.log("Testing screenshot (device mode)...");
+        stage = "screenshot_device";
+        send("tools/call", {
+            name: "take_screenshot",
+            arguments: { save_path: "verify_device.png" }
+        });
+    } else if (msg.result && msg.id === 5 && stage === "screenshot_device") { // screen1 (ID 5)
+        console.log("✅ Screenshot (device) success.");
         
-        // For now, let's just finish the semantic check.
-        // To properly test enter_text action, we'd need to modify main.dart.
-        // Let's skip enter_text for this specific script and assume harness logic is correct if a11y tree works.
-        // (Or we could write a test that expects failure finding widget, which proves tool was called)
+        console.log("Testing screenshot (skia mode)...");
+        stage = "screenshot_skia";
+        send("tools/call", {
+            name: "take_screenshot",
+            arguments: { save_path: "verify_skia.png", type: "skia" }
+        });
+    } else if (msg.result && msg.id === 6 && stage === "screenshot_skia") { // screen2 (ID 6)
+        console.log("✅ Screenshot (skia) success.");
         
         console.log("Stopping app...");
         send("tools/call", {
             name: "stop_app",
             arguments: {}
         });
-    } else if (msg.result && msg.id === 4) {
+    } else if (msg.result && msg.id === 7) { // stop (ID 7)
         console.log("App stopped. Exiting.");
         process.exit(0);
     }
