@@ -17,6 +17,10 @@ let activeWs: WebSocket | null = null;
 let wsServer: WebSocketServer | null = null;
 let wsPort: number | null = null;
 let currentObservatoryUri: string | null = null;
+let currentAppId: string | null = null;
+const logBuffer: string[] = []; // Store logs in memory
+const MAX_LOG_BUFFER = 1000;
+
 // Map request ID to promise resolvers
 const pendingRequests = new Map<
   string | number,
@@ -26,6 +30,12 @@ let nextMsgId = 1;
 let appStartedResolver: (() => void) | null = null;
 
 // --- Helper Functions ---
+function addToLogBuffer(message: string) {
+    if (logBuffer.length >= MAX_LOG_BUFFER) {
+        logBuffer.shift(); // Remove oldest
+    }
+    logBuffer.push(message);
+}
 
 // Send JSON-RPC to the Dart harness
 async function sendRpc(method: string, params: any) {
@@ -147,6 +157,24 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
         inputSchema: {
           type: "object",
           properties: {},
+        },
+      },
+      {
+        name: "hot_restart",
+        description: "Performs a hot restart of the running app (reloads code and resets state).",
+        inputSchema: {
+          type: "object",
+          properties: {},
+        },
+      },
+      {
+        name: "read_logs",
+        description: "Reads the last N lines from the app's stdout/stderr.",
+        inputSchema: {
+          type: "object",
+          properties: {
+            lines: { type: "number", description: "Number of lines to read (default 50)" }
+          },
         },
       },
       {
@@ -446,6 +474,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       
       // Reset state
       currentObservatoryUri = null;
+      logBuffer.length = 0; // Clear logs
 
       // 1. Start WS Server
       const port = await startWsServer();
@@ -481,7 +510,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       
       activeProcess = execa("flutter", flutterArgs, {
         cwd: project_path,
-        stdio: ["ignore", "pipe", "pipe"], // pipe stdout/stderr to log
+        stdio: ["pipe", "pipe", "pipe"], // pipe stdout/stderr to log
       });
       activeProcess.catch((e: any) => {}); // Prevent unhandled rejection
       
@@ -489,6 +518,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       activeProcess.stdout?.on("data", (chunk: any) => {
           const str = chunk.toString();
           console.error(`[Flutter]: ${str}`);
+          addToLogBuffer(str);
           
           // Parse JSON events from flutter run --machine
           const lines = str.split("\n");
@@ -508,7 +538,11 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
               }
           }
       });
-      activeProcess.stderr?.on("data", (chunk: any) => console.error(`[Flutter Err]: ${chunk}`));
+      activeProcess.stderr?.on("data", (chunk: any) => {
+        const str = chunk.toString();
+        console.error(`[Flutter Err]: ${str}`);
+        addToLogBuffer(str);
+      });
 
       activeProcess.on("exit", (code: any) => {
         console.error(`Flutter process exited with code ${code}`);
@@ -536,6 +570,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       }
       activeWs?.close();
       currentObservatoryUri = null;
+      currentAppId = null;
       
       // Clean up screenshots
       const tempDir = path.join(os.tmpdir(), "flutter_pilot_screenshots");
@@ -546,6 +581,36 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       }
 
       return { content: [{ type: "text", text: "App stopped." }] };
+    }
+
+    if (name === "hot_restart") {
+        if (!activeProcess) {
+            throw new Error("App is not running. Use start_app first.");
+        }
+        if (!currentAppId) {
+            throw new Error("App ID not available. Cannot restart.");
+        }
+        
+        // Send JSON-RPC restart command to flutter run stdin
+        // Flutter run --machine expects [ { "method": "app.restart", "params": { "appId": "...", "fullRestart": true }, "id": <id> } ]
+        const restartCmd = JSON.stringify([{ 
+            "method": "app.restart", 
+            "params": { 
+                "appId": currentAppId,
+                "fullRestart": true 
+            }, 
+            "id": nextMsgId++ 
+        }]) + "\n";
+        activeProcess.stdin.write(restartCmd);
+        
+        console.error("Sent hot restart command.");
+        return { content: [{ type: "text", text: "Hot restart command sent." }] };
+    }
+
+    if (name === "read_logs") {
+        const { lines = 50 } = args as { lines?: number };
+        const logs = logBuffer.slice(-lines);
+        return { content: [{ type: "text", text: logs.join("") }] };
     }
 
     if (name === "take_screenshot") {
