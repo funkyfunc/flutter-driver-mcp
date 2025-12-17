@@ -652,15 +652,15 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         await fs.mkdir(tempDir, { recursive: true });
         const tempPath = path.join(tempDir, `screenshot_${Date.now()}.png`);
 
-        console.error(`Taking screenshot via: flutter screenshot --type=${type} --vm-service-url=${currentObservatoryUri} -o ${tempPath}`);
+        const screenshotArgs = ["screenshot", `--type=${type}`, "-o", tempPath];
+        if (type !== "device") {
+            screenshotArgs.push("--vm-service-url=" + currentObservatoryUri);
+        }
+
+        console.error(`Taking screenshot via: flutter ${screenshotArgs.join(" ")}`);
         
         try {
-            await execa("flutter", [
-                "screenshot",
-                `--type=${type}`,
-                "--vm-service-url=" + currentObservatoryUri,
-                "-o", tempPath
-            ]);
+            await execa("flutter", screenshotArgs);
 
             // Check if file exists
             await fs.access(tempPath);
