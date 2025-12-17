@@ -652,13 +652,13 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         await fs.mkdir(tempDir, { recursive: true });
         const tempPath = path.join(tempDir, `screenshot_${Date.now()}.png`);
 
-        console.error(`Taking screenshot via: flutter screenshot --type=${type} --observatory-uri=${currentObservatoryUri} -o ${tempPath}`);
+        console.error(`Taking screenshot via: flutter screenshot --type=${type} --vm-service-uri=${currentObservatoryUri} -o ${tempPath}`);
         
         try {
             await execa("flutter", [
                 "screenshot",
                 `--type=${type}`,
-                "--observatory-uri=" + currentObservatoryUri,
+                "--vm-service-uri=" + currentObservatoryUri,
                 "-o", tempPath
             ]);
 

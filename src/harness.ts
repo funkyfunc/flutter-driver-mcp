@@ -212,7 +212,7 @@ Finder _createLazyFinder(Map<String, dynamic> params) {
 
 Future<void> _handleTap(WidgetTester tester, Map<String, dynamic> params) async {
   final result = _createFinder(params);
-  await tester.tap(result.finder);
+  await tester.tap(result.finder, warnIfMissed: false);
   await tester.pumpAndSettle();
 }
 
