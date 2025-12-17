@@ -107,15 +107,11 @@ void main() {
             throw 'Unknown method: \$method';
         }
         
-        print('MCP: Method \$method completed. Encoding response...');
-        final jsonResponse = jsonEncode({
+        channel.sink.add(jsonEncode({
           'jsonrpc': '2.0',
           'id': id,
           'result': result ?? {'status': 'success'},
-        });
-        print('MCP: Response encoded (length: \${jsonResponse.length}). Sending...');
-        channel.sink.add(jsonResponse);
-        print('MCP: Response sent.');
+        }));
       } catch (e, stack) {
         print('MCP: Error: \$e');
         channel.sink.add(jsonEncode({
@@ -314,15 +310,12 @@ Future<void> _handleWaitFor(WidgetTester tester, Map<String, dynamic> params) as
 }
 
 Future<Map<String, dynamic>> _handleGetAccessibilityTree(WidgetTester tester) async {
-  print('MCP: _handleGetAccessibilityTree started');
   final binding = tester.binding;
   // Ensure semantics are enabled
   binding.pipelineOwner.ensureSemantics();
-  print('MCP: ensureSemantics called');
   
   // Wait for the semantics tree to be generated
   await tester.pumpAndSettle();
-  print('MCP: pumpAndSettle done');
   
   final semanticsOwner = binding.pipelineOwner.semanticsOwner;
   if (semanticsOwner == null) return {'error': 'SemanticsOwner is null'};
@@ -330,10 +323,7 @@ Future<Map<String, dynamic>> _handleGetAccessibilityTree(WidgetTester tester) as
   final root = semanticsOwner.rootSemanticsNode;
   if (root == null) return {'error': 'No root semantics node'};
   
-  print('MCP: Serializing root node');
-  final result = _serializeSemanticsNode(root);
-  print('MCP: Serialization complete');
-  return result;
+  return _serializeSemanticsNode(root);
 }
 
 Map<String, dynamic> _serializeSemanticsNode(SemanticsNode node) {

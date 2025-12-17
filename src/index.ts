@@ -75,13 +75,10 @@ async function startWsServer(): Promise<number> {
       
       ws.on("message", (data) => {
         try {
-          const strData = data.toString();
-          console.error(`[Server] WS Message received: \${strData.substring(0, 200)}...`);
-          const msg = JSON.parse(strData);
+          const msg = JSON.parse(data.toString());
           
           // Handle responses
           if (msg.id && pendingRequests.has(msg.id)) {
-            console.error(`[Server] Resolving request \${msg.id}`);
             const { resolve, reject } = pendingRequests.get(msg.id)!;
             pendingRequests.delete(msg.id);
             if (msg.error) {
