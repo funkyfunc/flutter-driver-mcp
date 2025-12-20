@@ -18,6 +18,8 @@ let wsServer: WebSocketServer | null = null;
 let wsPort: number | null = null;
 let currentObservatoryUri: string | null = null;
 let currentAppId: string | null = null;
+let currentProjectPath: string | null = null;
+let currentDeviceId: string | null = null;
 const logBuffer: string[] = []; // Store logs in memory
 const MAX_LOG_BUFFER = 1000;
 
@@ -321,8 +323,9 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
             save_path: { type: "string", description: "Optional path to save the screenshot file (e.g. 'screenshot.png'). If not provided, returns base64." },
             type: { 
                 type: "string", 
-                enum: ["device", "rasterizer", "skia"], 
-                description: "The type of screenshot to retrieve. Defaults to 'device'. 'rasterizer' is often better for specific views." 
+                enum: ["device", "skia", "app"], 
+                default: "app",
+                description: "The type of screenshot to retrieve. 'app' (default): Renders the current Flutter frame to PNG (recommended for vision). 'device': Native device screenshot (might fail on desktop or capture home screen). 'skia': Skia picture (vector, not PNG, NOT for AI vision)." 
             }
           },
         },
@@ -486,6 +489,8 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       
       // Reset state
       currentObservatoryUri = null;
+      currentProjectPath = project_path;
+      currentDeviceId = device_id || null;
       logBuffer.length = 0; // Clear logs
 
       // 1. Start WS Server
@@ -596,6 +601,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       activeWs?.close();
       currentObservatoryUri = null;
       currentAppId = null;
+      currentProjectPath = null;
       
       // Clean up screenshots
       const tempDir = path.join(os.tmpdir(), "flutter_pilot_screenshots");
@@ -644,6 +650,27 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         if (!activeProcess) {
             throw new Error("App is not running. Use start_app first.");
         }
+
+        if (type === "app") {
+             const result = await sendRpc("screenshot", {}) as { data: string, format: string, error?: string };
+             if (result.error) throw new Error(result.error);
+             
+             const base64 = result.data;
+             const buffer = Buffer.from(base64, 'base64');
+             
+             if (save_path) {
+                 await fs.writeFile(save_path, buffer);
+                 return { content: [{ type: "text", text: `Screenshot saved to ${save_path}` }] };
+             } else {
+                 return { 
+                    content: [
+                        { type: "text", text: "Screenshot captured:" },
+                        { type: "image", data: base64, mimeType: "image/png" }
+                    ] 
+                };
+             }
+        }
+
         if (!currentObservatoryUri) {
             throw new Error("Observatory URI not available. Screenshot requires a debug/profile build with VM service enabled.");
         }
@@ -656,11 +683,17 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         if (type !== "device") {
             screenshotArgs.push("--vm-service-url=" + currentObservatoryUri);
         }
+        
+        if (currentDeviceId) {
+            screenshotArgs.push("-d", currentDeviceId);
+        }
 
         console.error(`Taking screenshot via: flutter ${screenshotArgs.join(" ")}`);
         
         try {
-            await execa("flutter", screenshotArgs);
+            await execa("flutter", screenshotArgs, {
+                cwd: currentProjectPath || undefined
+            });
 
             // Check if file exists
             await fs.access(tempPath);

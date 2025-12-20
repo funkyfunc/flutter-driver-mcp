@@ -1,6 +1,7 @@
 export const getHarnessCode = (packageName?: string) => `
 import 'dart:convert';
 import 'dart:io';
+import 'dart:ui' as ui;
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:integration_test/integration_test.dart';
@@ -102,6 +103,9 @@ void main() {
             break;
           case 'wait_for':
             await _handleWaitFor(tester, params);
+            break;
+          case 'screenshot':
+            result = await _handleScreenshot(tester);
             break;
           default:
             throw 'Unknown method: \$method';
@@ -514,5 +518,26 @@ bool _shouldKeep(Map<String, dynamic> json) {
   if (flattenWidgets.contains(type)) return false;
   
   return true;
+}
+
+Future<Map<String, dynamic>> _handleScreenshot(WidgetTester tester) async {
+  try {
+    final element = tester.binding.rootElement;
+    if (element == null) return {'error': 'No root element'};
+    
+    final image = await captureImage(element);
+    final byteData = await image.toByteData(format: ui.ImageByteFormat.png);
+    if (byteData == null) return {'error': 'Failed to encode image'};
+    
+    final bytes = byteData.buffer.asUint8List();
+    final base64String = base64Encode(bytes);
+    
+    return {
+      'data': base64String,
+      'format': 'png',
+    };
+  } catch (e) {
+    return {'error': e.toString()};
+  }
 }
 `;
