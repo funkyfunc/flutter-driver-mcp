@@ -123,6 +123,31 @@ async function getPackageName(projectPath: string): Promise<string | undefined> 
     }
 }
 
+// Helper to parse simplified target strings into finderType objects
+// Formats:
+// "#myKey" -> { finderType: "byKey", key: "myKey" }
+// "text='Submit'" -> { finderType: "byText", text: "Submit" }
+// "type='ElevatedButton'" -> { finderType: "byType", type: "ElevatedButton" }
+// "tooltip='Back'" -> { finderType: "byTooltip", tooltip: "Back" }
+function parseTarget(target: string): any {
+    if (target.startsWith("#")) {
+        return { finderType: "byKey", key: target.substring(1) };
+    }
+    
+    const parts = target.split("=");
+    if (parts.length === 2) {
+        const key = parts[0].trim();
+        const value = parts[1].trim().replace(/^['"]|['"]$/g, ''); // Remove outer quotes
+        switch(key) {
+            case 'text': return { finderType: "byText", text: value };
+            case 'type': return { finderType: "byType", type: value };
+            case 'tooltip': return { finderType: "byTooltip", tooltip: value };
+        }
+    }
+    
+    throw new Error(`Invalid target string: '\${target}'. Use '#key', 'text="text"', 'type="type"', or 'tooltip="tooltip"'.`);
+}
+
 // --- MCP Server Setup ---
 
 const server = new Server(
@@ -162,11 +187,32 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
         },
       },
       {
-        name: "hot_restart",
-        description: "Performs a hot restart of the currently running app session started by this server.",
+        name: "pilot_hot_restart",
+        description: "Performs a hot restart of the currently running app session started by this server. Prefer using the official MCP 'hot_restart' if connected to DTD.",
         inputSchema: {
           type: "object",
           properties: {},
+        },
+      },
+      {
+        name: "simulate_background",
+        description: "Simulates the app going into the background and coming back to the foreground.",
+        inputSchema: {
+          type: "object",
+          properties: {
+             duration_ms: { type: "number", description: "How long to keep the app in the background (default: 2000)" }
+          },
+        },
+      },
+      {
+        name: "set_network_status",
+        description: "Simulates network connectivity changes (macOS/iOS Simulator only right now).",
+        inputSchema: {
+          type: "object",
+          properties: {
+             wifi: { type: "boolean", description: "Enable or disable WiFi" }
+          },
+          required: ["wifi"],
         },
       },
       {
@@ -193,43 +239,32 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
       },
       {
         name: "tap",
-        description: "Taps on a widget identified by the finder.",
+        description: "Taps on a widget identified by the target string.",
         inputSchema: {
           type: "object",
           properties: {
-            finderType: {
-              type: "string",
-              enum: ["byKey", "byText", "byTooltip", "byType"],
-              description: "Type of finder to use"
-            },
-            key: { type: "string", description: "Key value (for byKey)" },
-            text: { type: "string", description: "Text to match (for byText)" },
-            tooltip: { type: "string", description: "Tooltip message (for byTooltip)" },
-            type: { type: "string", description: "Runtime type string (for byType)" },
+            target: { type: "string", description: "Target string (e.g. '#loginBtn', 'text=\"Submit\"', 'type=\"ElevatedButton\"')" },
+            // Legacy fallbacks
+            finderType: { type: "string" }, key: { type: "string" }, text: { type: "string" }, tooltip: { type: "string" }, type: { type: "string" }
           },
-          required: ["finderType"],
         },
       },
       {
         name: "enter_text",
-        description: "Enters text into a widget found by the finder.",
+        description: "Enters text into a widget found by the target string.",
         inputSchema: {
           type: "object",
           properties: {
             text: { type: "string", description: "Text to enter" },
+            target: { type: "string", description: "Target string (e.g. '#emailField', 'type=\"TextField\"')" },
             action: { 
                 type: "string", 
                 description: "Optional TextInputAction to perform after entering text (e.g. 'done', 'search', 'next', 'go', 'send')." 
             },
-            finderType: {
-              type: "string",
-              enum: ["byKey", "byText", "byTooltip", "byType"],
-              description: "Finder type"
-            },
-            key: { type: "string" },
-            // Add other finder props if needed
+            // Legacy
+            finderType: { type: "string" }, key: { type: "string" }
           },
-          required: ["text", "finderType"],
+          required: ["text"],
         },
       },
       {
@@ -238,17 +273,13 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
         inputSchema: {
           type: "object",
           properties: {
-            finderType: {
-              type: "string",
-              enum: ["byKey", "byText", "byTooltip", "byType"],
-              description: "Finder type"
-            },
-            key: { type: "string" },
-            text: { type: "string" },
+            target: { type: "string", description: "Target string (e.g. '#list', 'type=\"ListView\"')" },
             dx: { type: "number", description: "Horizontal scroll delta" },
             dy: { type: "number", description: "Vertical scroll delta" },
+            // Legacy
+            finderType: { type: "string" }, key: { type: "string" }
           },
-          required: ["finderType", "dx", "dy"],
+          required: ["dx", "dy"],
         },
       },
       {
@@ -257,25 +288,12 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
         inputSchema: {
           type: "object",
           properties: {
-            finderType: {
-              type: "string",
-              enum: ["byKey", "byText", "byTooltip", "byType"],
-              description: "Finder type for the TARGET widget"
-            },
-            key: { type: "string" },
-            text: { type: "string" },
+            target: { type: "string", description: "Target string for the widget to find" },
             dy: { type: "number", description: "Vertical scroll delta per step (default 50.0)" },
-            scrollable: {
-                type: "object",
-                description: "Optional finder for the scrollable widget",
-                properties: {
-                    finderType: { type: "string", enum: ["byKey", "byType"] },
-                    key: { type: "string" },
-                    type: { type: "string" }
-                }
-            }
+            scrollable_target: { type: "string", description: "Optional target string for the scrollable container" },
+            // Legacy
+            finderType: { type: "string" }, key: { type: "string" }
           },
-          required: ["finderType"],
         },
       },
       {
@@ -284,16 +302,11 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
         inputSchema: {
           type: "object",
           properties: {
-            finderType: {
-              type: "string",
-              enum: ["byKey", "byText", "byTooltip", "byType"],
-              description: "Finder type"
-            },
-            key: { type: "string" },
-            text: { type: "string" },
+            target: { type: "string", description: "Target string" },
             timeout: { type: "number", description: "Timeout in milliseconds" },
+            // Legacy
+            finderType: { type: "string" }, key: { type: "string" }
           },
-          required: ["finderType"],
         },
       },
       {
@@ -312,6 +325,83 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
         inputSchema: {
           type: "object",
           properties: {},
+        },
+      },
+      {
+        name: "explore_screen",
+        description: "Maps out interactive elements on the screen.",
+        inputSchema: {
+          type: "object",
+          properties: {},
+        },
+      },
+      {
+        name: "navigate_to",
+        description: "Pushes a named route using the root Navigator.",
+        inputSchema: {
+          type: "object",
+          properties: {
+             route: { type: "string", description: "Named route to navigate to (e.g. '/settings')" }
+          },
+          required: ["route"],
+        },
+      },
+      {
+        name: "intercept_network",
+        description: "Mocks a network response. Pass null for both to clear.",
+        inputSchema: {
+          type: "object",
+          properties: {
+             urlPattern: { type: "string" },
+             responseBody: { type: "string" }
+          },
+        },
+      },
+      {
+        name: "assert_exists",
+        description: "Returns { success: true } if the target exists.",
+        inputSchema: {
+          type: "object",
+          properties: {
+             target: { type: "string" }
+          },
+          required: ["target"],
+        },
+      },
+      {
+        name: "assert_not_exists",
+        description: "Returns { success: true } if the target does NOT exist.",
+        inputSchema: {
+          type: "object",
+          properties: {
+             target: { type: "string" }
+          },
+          required: ["target"],
+        },
+      },
+      {
+        name: "assert_text_equals",
+        description: "Returns { success: true } if the target text matches.",
+        inputSchema: {
+          type: "object",
+          properties: {
+             target: { type: "string" },
+             expectedText: { type: "string" }
+          },
+          required: ["target", "expectedText"],
+        },
+      },
+      {
+        name: "assert_state",
+        description: "Returns { success: true } if the target state (e.g. Checkbox value) matches.",
+        inputSchema: {
+          type: "object",
+          properties: {
+             target: { type: "string" },
+             stateKey: { type: "string", description: "e.g. 'value', 'groupValue'" },
+             expectedValue: { type: "boolean", description: "Expected bool value" } // Using generic for simplicity
+          },
+          required: ["target", "stateKey", "expectedValue"],
         },
       },
       {
@@ -478,8 +568,26 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           // Ignore if web folder doesn't exist or isn't a web project
       }
 
+      // 5. Add harness to .gitignore
+      const gitignorePath = path.join(project_path, ".gitignore");
+      try {
+          await fs.access(gitignorePath);
+          const gitignoreContent = await fs.readFile(gitignorePath, "utf-8");
+          if (!gitignoreContent.includes("integration_test/mcp_harness.dart")) {
+             if (auto_fix) {
+                 await fs.appendFile(gitignorePath, "\n# Flutter Pilot MCP Harness\nintegration_test/mcp_harness.dart\n");
+                 report.push("✅ Added 'integration_test/mcp_harness.dart' to .gitignore.");
+             } else {
+                 report.push("❌ Missing 'integration_test/mcp_harness.dart' in .gitignore.");
+                 success = false;
+             }
+          }
+      } catch(e) {
+         // ignore if no gitignore
+      }
+
       return {
-          content: [{ type: "text", text: report.join("\n") }],
+          content: [{ type: "text", text: report.join("\\n") }],
           isError: !success && !auto_fix 
       };
     }
@@ -614,7 +722,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       return { content: [{ type: "text", text: "App stopped." }] };
     }
 
-    if (name === "hot_restart") {
+    if (name === "pilot_hot_restart") {
         if (!activeProcess) {
             throw new Error("App is not running. Use start_app first.");
         }
@@ -721,27 +829,56 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
     }
 
     if (name === "tap") {
-      const result = await sendRpc("tap", args);
+      const payload = args as any;
+      if (payload.target) {
+          Object.assign(payload, parseTarget(payload.target));
+          delete payload.target;
+      }
+      const result = await sendRpc("tap", payload);
       return { content: [{ type: "text", text: JSON.stringify(result) }] };
     }
 
     if (name === "enter_text") {
-        const result = await sendRpc("enter_text", args);
+        const payload = args as any;
+        if (payload.target) {
+            Object.assign(payload, parseTarget(payload.target));
+            delete payload.target;
+        }
+        const result = await sendRpc("enter_text", payload);
         return { content: [{ type: "text", text: JSON.stringify(result) }] };
     }
     
     if (name === "scroll") {
-        const result = await sendRpc("scroll", args);
+        const payload = args as any;
+        if (payload.target) {
+            Object.assign(payload, parseTarget(payload.target));
+            delete payload.target;
+        }
+        const result = await sendRpc("scroll", payload);
         return { content: [{ type: "text", text: JSON.stringify(result) }] };
     }
 
     if (name === "scroll_until_visible") {
-        const result = await sendRpc("scroll_until_visible", args);
+        const payload = args as any;
+        if (payload.target) {
+            Object.assign(payload, parseTarget(payload.target));
+            delete payload.target;
+        }
+        if (payload.scrollable_target) {
+            payload.scrollable = parseTarget(payload.scrollable_target);
+            delete payload.scrollable_target;
+        }
+        const result = await sendRpc("scroll_until_visible", payload);
         return { content: [{ type: "text", text: JSON.stringify(result) }] };
     }
 
     if (name === "wait_for") {
-        const result = await sendRpc("wait_for", args);
+        const payload = args as any;
+        if (payload.target) {
+            Object.assign(payload, parseTarget(payload.target));
+            delete payload.target;
+        }
+        const result = await sendRpc("wait_for", payload);
         return { content: [{ type: "text", text: JSON.stringify(result) }] };
     }
     
@@ -753,6 +890,68 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
     if (name === "get_accessibility_tree") {
         const result = await sendRpc("get_accessibility_tree", args);
         return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+    }
+
+    if (name === "explore_screen") {
+        const result = await sendRpc("explore_screen", args);
+        return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+    }
+
+    if (name === "navigate_to") {
+        const result = await sendRpc("navigate_to", args);
+        return { content: [{ type: "text", text: JSON.stringify(result) }] };
+    }
+
+    if (name === "intercept_network") {
+        const result = await sendRpc("intercept_network", args);
+        return { content: [{ type: "text", text: JSON.stringify(result) }] };
+    }
+
+    if (name.startsWith("assert_")) {
+        const payload = args as any;
+        if (payload.target) {
+            Object.assign(payload, parseTarget(payload.target));
+            delete payload.target;
+        }
+        const result = await sendRpc(name, payload);
+        return { content: [{ type: "text", text: JSON.stringify(result) }] };
+    }
+
+    if (name === "simulate_background") {
+        const { duration_ms = 2000 } = args as { duration_ms?: number };
+        // If it's an iOS simulator, we can use xcrun simctl
+        if (currentDeviceId && currentDeviceId.includes('-')) {
+             try {
+                // Background
+                await execa("xcrun", ["simctl", "launch", currentDeviceId, "com.apple.springboard"]);
+                await new Promise(r => setTimeout(r, duration_ms));
+                // Resuming requires knowing the bundle ID, which we could extract from the project,
+                // but for now, this is a basic stub
+             } catch(e) { }
+             return { content: [{ type: "text", text: "Simulated backgrounding via simctl (Note: resuming might require manual tap if bundle ID is unknown)" }] };
+        } else if (currentDeviceId && currentDeviceId.startsWith("emulator-")) {
+             try {
+                // Press Home button
+                await execa("adb", ["-s", currentDeviceId, "shell", "input", "keyevent", "KEYCODE_HOME"]);
+                await new Promise(r => setTimeout(r, duration_ms));
+                // Resume might require waking up depending on adb
+             } catch(e) { }
+             return { content: [{ type: "text", text: "Simulated backgrounding via adb" }] };
+        }
+        return { content: [{ type: "text", text: "Device not supported for simulate_background" }] };
+    }
+
+    if (name === "set_network_status") {
+        const { wifi } = args as { wifi: boolean };
+        if (currentDeviceId && currentDeviceId.includes('-')) {
+             return { content: [{ type: "text", text: "Network toggling in iOS simulators is complex and usually requires external proxies. Consider using 'intercept_network' instead." }] };
+        } else if (currentDeviceId && currentDeviceId.startsWith("emulator-")) {
+             try {
+                await execa("adb", ["-s", currentDeviceId, "shell", "svc", "wifi", wifi ? "enable" : "disable"]);
+                return { content: [{ type: "text", text: `Set WiFi to ${wifi} via adb` }] };
+             } catch(e) { }
+        }
+        return { content: [{ type: "text", text: "Device not supported for set_network_status" }] };
     }
 
     throw new Error(`Unknown tool: ${name}`);

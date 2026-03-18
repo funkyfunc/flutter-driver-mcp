@@ -5,10 +5,12 @@
   "type": "module",
   "main": "dist/src/index.js",
   "scripts": {
-    "build": "rm -rf dist && tsc",
+    "build": "rm -rf dist && tsc && cp src/harness.dart dist/src/ && npm run verify-harness",
     "start": "node dist/src/index.js",
     "watch": "tsc --watch",
+    "verify-harness": "node dist/verification/verify_harness_syntax.js",
     "verify": "node dist/verification/verify.js",
+    "verify-integration": "node dist/verification/verify_integration.js",
     "verify-validate": "node dist/verification/verify_validate.js",
     "verify-tools": "node dist/verification/verify_tools.js",
     "verify-scroll": "node dist/verification/verify_scroll.js",

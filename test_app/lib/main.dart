@@ -11,17 +11,77 @@ class MyApp extends StatelessWidget {
   Widget build(BuildContext context) {
     return MaterialApp(
       title: 'Test App',
-      home: Scaffold(
-        appBar: AppBar(title: const Text('Scroll Test')),
-        body: ListView.builder(
-          itemCount: 100,
-          itemBuilder: (context, index) {
-            return ListTile(
-              title: Text('Item $index'),
-              key: ValueKey('item_$index'),
-            );
-          },
+      initialRoute: '/',
+      routes: {
+        '/': (context) => const HomeScreen(),
+        '/details': (context) => const DetailsScreen(),
+      },
+    );
+  }
+}
+
+class HomeScreen extends StatefulWidget {
+  const HomeScreen({super.key});
+  @override
+  State<HomeScreen> createState() => _HomeScreenState();
+}
+
+class _HomeScreenState extends State<HomeScreen> {
+  bool _isChecked = false;
+  final TextEditingController _controller = TextEditingController();
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(title: const Text('Home Screen')),
+      body: Center(
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            const Text('Welcome Home', key: Key('welcome_text')),
+            Checkbox(
+              key: const Key('my_checkbox'),
+              value: _isChecked,
+              onChanged: (val) => setState(() => _isChecked = val ?? false),
+            ),
+            Padding(
+              padding: const EdgeInsets.all(16.0),
+              child: TextField(
+                key: const Key('my_textfield'),
+                controller: _controller,
+                decoration: const InputDecoration(hintText: 'Enter text here'),
+              ),
+            ),
+            ElevatedButton(
+              key: const Key('nav_button'),
+              onPressed: () => Navigator.pushNamed(context, '/details'),
+              child: const Text('Go to Details'),
+            ),
+          ],
         ),
+      ),
+    );
+  }
+}
+
+class DetailsScreen extends StatelessWidget {
+  const DetailsScreen({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(title: const Text('Details')),
+      body: ListView.builder(
+        itemCount: 100,
+        itemBuilder: (context, index) {
+          return ListTile(
+            title: Text('Item $index'),
+            key: ValueKey('item_$index'),
+            onTap: () {
+              // Just a dummy action to make it interactive semantics
+            },
+          );
+        },
       ),
     );
   }
