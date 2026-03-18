@@ -11,6 +11,21 @@ const server = spawn("node", [serverPath], {
   stdio: ["pipe", "pipe", "inherit"],
 });
 
+// Ensure the server process is always cleaned up
+function cleanup() {
+  try { server.kill("SIGKILL"); } catch(e) {}
+  // Also kill any orphaned flutter processes from the test
+  try {
+    const { execSync } = require("child_process");
+    execSync("pkill -f 'test_app.*flutter'", { stdio: "ignore" });
+    execSync("pkill -f 'test_app.app'", { stdio: "ignore" });
+  } catch(e) {}
+}
+process.on("exit", cleanup);
+process.on("SIGINT", () => { cleanup(); process.exit(1); });
+process.on("SIGTERM", () => { cleanup(); process.exit(1); });
+process.on("uncaughtException", (e) => { console.error(e); cleanup(); process.exit(1); });
+
 let msgId = 1;
 const expectedCallbacks = new Map<number, (res: any) => void>();
 

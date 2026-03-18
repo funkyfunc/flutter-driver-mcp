@@ -702,11 +702,60 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
     }
 
     if (name === "stop_app") {
+      // 1. Gracefully stop via flutter run --machine protocol
+      if (activeProcess && currentAppId) {
+        try {
+          const stopCmd = JSON.stringify([{
+            "method": "app.stop",
+            "params": { "appId": currentAppId },
+            "id": nextMsgId++
+          }]) + "\n";
+          activeProcess.stdin.write(stopCmd);
+          console.error("Sent app.stop command to Flutter daemon.");
+
+          // Wait briefly for graceful shutdown
+          await new Promise<void>((resolve) => {
+            const timeout = setTimeout(() => resolve(), 5000);
+            activeProcess?.on("exit", () => {
+              clearTimeout(timeout);
+              resolve();
+            });
+          });
+        } catch (e) {
+          console.error("Error sending app.stop:", e);
+        }
+      }
+
+      // 2. Force kill the flutter process if still alive
       if (activeProcess) {
-        activeProcess.kill();
+        try {
+          activeProcess.kill("SIGKILL");
+        } catch (e) {
+          // ignore - process may already be dead
+        }
         activeProcess = null;
       }
+
+      // 3. Close WebSocket
       activeWs?.close();
+      
+      // 4. Kill any orphaned test app processes on macOS/Linux
+      //    The macOS app binary is typically named after the project (e.g. "test_app")
+      if (currentProjectPath) {
+        const projectName = path.basename(currentProjectPath);
+        try {
+          await execa("pkill", ["-f", `${projectName}.*flutter`], { reject: false });
+        } catch (e) {
+          // ignore
+        }
+        // Also try to kill any Flutter-launched macOS .app process
+        try {
+          await execa("pkill", ["-f", `${projectName}.app`], { reject: false });
+        } catch (e) {
+          // ignore
+        }
+      }
+
       currentObservatoryUri = null;
       currentAppId = null;
       currentProjectPath = null;
