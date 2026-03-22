@@ -139,7 +139,7 @@ Once your MCP client is connected, ask the agent to:
 | `get_widget_tree` | Returns the full widget tree as JSON. Use `summaryOnly: true` to filter layout noise. |
 | `get_accessibility_tree` | Returns the Semantics tree — compact, labels-focused, ideal for LLMs. Pass `includeRect: true` if coordinates are needed. |
 | `explore_screen` | Maps all interactive elements on the current screen using the native Semantics tree. |
-| `take_screenshot` | Captures a PNG screenshot. `type: "app"` (recommended) renders via Flutter; `"device"` uses native capture. |
+| `take_screenshot` | Captures a PNG screenshot. Defaults to `type: "app"` (recommended) for maximum reliability; `"device"` uses native capture. |
 
 ### Assertions
 

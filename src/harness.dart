@@ -239,7 +239,7 @@ void main() {
             await _handleEnterText(tester, params);
             break;
           case 'get_widget_tree':
-            result = _handleGetWidgetTree(params);
+            result = _handleGetWidgetTree(tester, params);
             break;
           case 'get_accessibility_tree':
             result = await _handleGetAccessibilityTree(tester, params);
@@ -307,11 +307,11 @@ _FinderResult _createFinder(Map<String, dynamic> params) {
   if (finderType == null) throw 'finderType is required';
 
   Finder finder;
-  switch (finderType) {
-    case 'byKey':
+  switch (finderType.toLowerCase()) {
+    case 'bykey':
       finder = find.byKey(Key(params['key'] as String));
       break;
-    case 'byValueKey':
+    case 'byvaluekey':
       final keyVal = params['key'];
       if (keyVal is int) {
          finder = find.byKey(ValueKey<int>(keyVal));
@@ -319,14 +319,21 @@ _FinderResult _createFinder(Map<String, dynamic> params) {
         finder = find.byKey(ValueKey<String>(keyVal.toString()));
       }
       break;
-    case 'byText':
+    case 'bytext':
       finder = find.text(params['text'] as String);
       break;
-    case 'byTooltip':
+    case 'bytooltip':
       finder = find.byTooltip(params['tooltip'] as String);
       break;
-    case 'byType':
+    case 'bytype':
       finder = find.byWidgetPredicate((widget) => widget.runtimeType.toString() == params['type']);
+      break;
+    case 'byid':
+      final idString = params['id'].toString();
+      final id = int.tryParse(idString);
+      finder = find.byElementPredicate((Element element) {
+         return element.renderObject?.debugSemantics?.id == id;
+      });
       break;
     default:
       throw 'Unsupported finder type: $finderType';
@@ -365,10 +372,15 @@ _FinderResult _createFinder(Map<String, dynamic> params) {
 
     throw 'WidgetNotFoundException: No widget found with type "$finderType" and params "$params"$suggestionText';
   } else if (elements.length > 1) {
-    final matches = elements.map((e) => _serializeElement(e, summaryOnly: true)).toList();
+    int? index = params['index'] as int?;
+    if (index != null && index >= 0 && index < elements.length) {
+       return _FinderResult(finder.at(index), [elements[index]]);
+    }
+    
+    final matches = elements.map((e) => _serializeElement(e, summaryOnly: true, screenSize: Size.zero, inOverlay: false)).toList();
     throw AmbiguousFinderException(
       'Too many elements found for finder type "$finderType" with params "$params". '
-      'Consider using a more specific finder or adding a key.',
+      'Consider using a more specific finder, adding a key, or explicitly passing an "index" parameter (e.g. index: 0) to select the exact match out of ${elements.length}.',
       matches,
     );
   }
@@ -386,11 +398,11 @@ Finder _createLazyFinder(Map<String, dynamic> params) {
   if (finderType == null) throw 'finderType is required';
 
   Finder finder;
-  switch (finderType) {
-    case 'byKey':
+  switch (finderType.toLowerCase()) {
+    case 'bykey':
       finder = find.byKey(Key(params['key'] as String));
       break;
-    case 'byValueKey':
+    case 'byvaluekey':
       final keyVal = params['key'];
       if (keyVal is int) {
          finder = find.byKey(ValueKey<int>(keyVal));
@@ -398,14 +410,21 @@ Finder _createLazyFinder(Map<String, dynamic> params) {
         finder = find.byKey(ValueKey<String>(keyVal.toString()));
       }
       break;
-    case 'byText':
+    case 'bytext':
       finder = find.text(params['text'] as String);
       break;
-    case 'byTooltip':
+    case 'bytooltip':
       finder = find.byTooltip(params['tooltip'] as String);
       break;
-    case 'byType':
+    case 'bytype':
       finder = find.byWidgetPredicate((widget) => widget.runtimeType.toString() == params['type']);
+      break;
+    case 'byid':
+      final idString = params['id'].toString();
+      final id = int.tryParse(idString);
+      finder = find.byElementPredicate((Element element) {
+         return element.renderObject?.debugSemantics?.id == id;
+      });
       break;
     default:
       throw 'Unsupported finder type: $finderType';
@@ -489,7 +508,7 @@ Future<void> _handleScrollUntilVisible(WidgetTester tester, Map<String, dynamic>
     // If it failed, check if it was due to ambiguity or already visible
     final elements = targetFinder.evaluate().toList();
     if (elements.length > 1) {
-       final matches = elements.map((e) => _serializeElement(e, summaryOnly: true)).toList();
+       final matches = elements.map((e) => _serializeElement(e, summaryOnly: true, screenSize: Size.zero, inOverlay: false)).toList();
        throw AmbiguousFinderException(
          'Scroll failed due to ambiguity. Found ${elements.length} matches.',
          matches,
@@ -841,19 +860,27 @@ Map<String, dynamic> _serializeSemanticsNode(SemanticsNode node, {required bool 
   return json;
 }
 
-Map<String, dynamic> _handleGetWidgetTree(Map<String, dynamic> params) {
-  final root = WidgetsBinding.instance.rootElement;
+Map<String, dynamic> _handleGetWidgetTree(WidgetTester tester, Map<String, dynamic> params) {
+  final root = tester.binding.rootElement;
   if (root == null) return {'error': 'No root element'};
   
   final summaryOnly = params['summaryOnly'] == true;
-  return _serializeElement(root, summaryOnly: summaryOnly);
+  final view = tester.view;
+  final screenSize = view.physicalSize / view.devicePixelRatio;
+  return _serializeElement(root, summaryOnly: summaryOnly, screenSize: screenSize, inOverlay: false);
 }
 
-Map<String, dynamic> _serializeElement(Element element, {required bool summaryOnly}) {
+Map<String, dynamic> _serializeElement(Element element, {required bool summaryOnly, required Size screenSize, required bool inOverlay}) {
+  final widget = element.widget;
+  final type = widget.runtimeType.toString().replaceAll(RegExp(r'<[^>]*>'), '');
+  
+  bool isOverlayType = type == 'Overlay' || type == '_OverlayEntryWidget' || type == 'Dialog' || type == 'BottomSheet' || type == 'PopupMenuButton';
+  bool currentlyInOverlay = inOverlay || isOverlayType;
+
   final children = <Map<String, dynamic>>[];
   
   element.visitChildren((child) {
-    final serializedChild = _serializeElement(child, summaryOnly: summaryOnly);
+    final serializedChild = _serializeElement(child, summaryOnly: summaryOnly, screenSize: screenSize, inOverlay: currentlyInOverlay);
     if (!summaryOnly || _shouldKeep(serializedChild)) {
       children.add(serializedChild);
     } else if (serializedChild.containsKey('children')) {
@@ -861,12 +888,29 @@ Map<String, dynamic> _serializeElement(Element element, {required bool summaryOn
     }
   });
 
-  final widget = element.widget;
-  final type = widget.runtimeType.toString().replaceAll(RegExp(r'<[^>]*>'), '');
-  
   final json = <String, dynamic>{
     'type': type,
   };
+
+  if (currentlyInOverlay) {
+    json['isOverlay'] = true;
+  }
+
+  // Viewport detection
+  final ro = element.renderObject;
+  if (ro != null && ro.attached) {
+    try {
+      final transform = ro.getTransformTo(null);
+      final paintBounds = MatrixUtils.transformRect(transform, ro.paintBounds);
+      final screenRect = Offset.zero & screenSize;
+      // We only flag it if it has positive paint bounds intersecting the screen
+      if (paintBounds.width > 0 && paintBounds.height > 0) {
+        json['isInViewport'] = screenRect.overlaps(paintBounds);
+      }
+    } catch (_) {
+      // Ignore transform errors
+    }
+  }
 
   if (widget.key != null) {
     json['key'] = widget.key.toString();

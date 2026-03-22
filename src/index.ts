@@ -135,13 +135,14 @@ function parseTarget(target: string): any {
     }
     
     const parts = target.split("=");
-    if (parts.length === 2) {
+    if (parts.length >= 2) {
         const key = parts[0].trim();
-        const value = parts[1].trim().replace(/^['"]|['"]$/g, ''); // Remove outer quotes
+        const value = parts.slice(1).join("=").trim().replace(/^['"]|['"]$/g, ''); // Remove outer quotes
         switch(key) {
             case 'text': return { finderType: "byText", text: value };
             case 'type': return { finderType: "byType", type: value };
             case 'tooltip': return { finderType: "byTooltip", tooltip: value };
+            case 'id': return { finderType: "byId", id: value };
         }
     }
     
@@ -243,7 +244,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
         inputSchema: {
           type: "object",
           properties: {
-            target: { type: "string", description: "Target string (e.g. '#loginBtn', 'text=\"Submit\"', 'type=\"ElevatedButton\"')" },
+            target: { type: "string", description: "Target string (e.g. '#loginBtn', 'text=\"Submit\"', 'type=\"ElevatedButton\"', 'id=\"123\"')" },
             // Legacy fallbacks
             finderType: { type: "string" }, key: { type: "string" }, text: { type: "string" }, tooltip: { type: "string" }, type: { type: "string" }
           },
@@ -256,7 +257,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
           type: "object",
           properties: {
             text: { type: "string", description: "Text to enter" },
-            target: { type: "string", description: "Target string (e.g. '#emailField', 'type=\"TextField\"')" },
+            target: { type: "string", description: "Target string (e.g. '#loginBtn', 'text=\"Submit\"', 'type=\"ElevatedButton\"', 'id=\"123\"')" },
             action: { 
                 type: "string", 
                 description: "Optional TextInputAction to perform after entering text (e.g. 'done', 'search', 'next', 'go', 'send')." 
@@ -273,7 +274,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
         inputSchema: {
           type: "object",
           properties: {
-            target: { type: "string", description: "Target string (e.g. '#list', 'type=\"ListView\"')" },
+            target: { type: "string", description: "Target string (e.g. '#loginBtn', 'text=\"Submit\"', 'type=\"ElevatedButton\"', 'id=\"123\"')" },
             dx: { type: "number", description: "Horizontal scroll delta" },
             dy: { type: "number", description: "Vertical scroll delta" },
             // Legacy
@@ -288,7 +289,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
         inputSchema: {
           type: "object",
           properties: {
-            target: { type: "string", description: "Target string for the widget to find" },
+            target: { type: "string", description: "Target string (e.g. '#loginBtn', 'text=\"Submit\"', 'type=\"ElevatedButton\"', 'id=\"123\"')" },
             dy: { type: "number", description: "Vertical scroll delta per step (default 50.0)" },
             scrollable_target: { type: "string", description: "Optional target string for the scrollable container" },
             // Legacy
@@ -302,7 +303,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
         inputSchema: {
           type: "object",
           properties: {
-            target: { type: "string", description: "Target string" },
+            target: { type: "string", description: "Target string (e.g. '#loginBtn', 'text=\"Submit\"', 'type=\"ElevatedButton\"', 'id=\"123\"')" },
             timeout: { type: "number", description: "Timeout in milliseconds" },
             // Legacy
             finderType: { type: "string" }, key: { type: "string" }
@@ -365,7 +366,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
         inputSchema: {
           type: "object",
           properties: {
-             target: { type: "string" }
+             target: { type: "string", description: "Target string (e.g. '#loginBtn', 'text=\"Submit\"', 'type=\"ElevatedButton\"', 'id=\"123\"')" }
           },
           required: ["target"],
         },
@@ -376,7 +377,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
         inputSchema: {
           type: "object",
           properties: {
-             target: { type: "string" }
+             target: { type: "string", description: "Target string (e.g. '#loginBtn', 'text=\"Submit\"', 'type=\"ElevatedButton\"', 'id=\"123\"')" }
           },
           required: ["target"],
         },
@@ -387,7 +388,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
         inputSchema: {
           type: "object",
           properties: {
-             target: { type: "string" },
+             target: { type: "string", description: "Target string (e.g. '#loginBtn', 'text=\"Submit\"', 'type=\"ElevatedButton\"', 'id=\"123\"')" },
              expectedText: { type: "string" }
           },
           required: ["target", "expectedText"],
@@ -399,7 +400,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
         inputSchema: {
           type: "object",
           properties: {
-             target: { type: "string" },
+             target: { type: "string", description: "Target string (e.g. '#loginBtn', 'text=\"Submit\"', 'type=\"ElevatedButton\"', 'id=\"123\"')" },
              stateKey: { type: "string", description: "e.g. 'value', 'groupValue'" },
              expectedValue: { type: "boolean", description: "Expected bool value" } // Using generic for simplicity
           },
@@ -804,7 +805,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
     }
 
     if (name === "take_screenshot") {
-        const { save_path, type = "device" } = args as { save_path?: string, type?: string };
+        const { save_path, type = "app" } = args as { save_path?: string, type?: string };
         
         if (!activeProcess) {
             throw new Error("App is not running. Use start_app first.");
@@ -850,9 +851,18 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         console.error(`Taking screenshot via: flutter ${screenshotArgs.join(" ")}`);
         
         try {
-            await execa("flutter", screenshotArgs, {
-                cwd: currentProjectPath || undefined
-            });
+            try {
+                await execa("flutter", screenshotArgs, {
+                    cwd: currentProjectPath || undefined
+                });
+            } catch (flutterErr: any) {
+                if (currentDeviceId === "macos" && type === "device") {
+                    console.error("Flutter screenshot failed, falling back to macOS screencapture...");
+                    await execa("screencapture", ["-x", tempPath]);
+                } else {
+                    throw flutterErr;
+                }
+            }
 
             // Check if file exists
             await fs.access(tempPath);
