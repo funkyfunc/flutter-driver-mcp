@@ -3,7 +3,7 @@
  * Does NOT boot the test app — runs in under a second.
  */
 
-import { createClient, initClient, type McpTool } from "./helpers.js";
+import { createClient, type McpTool } from "./helpers.js";
 
 const EXPECTED_TOOLS = [
 	"start_app",
@@ -34,7 +34,7 @@ const EXPECTED_TOOLS = [
 async function main(): Promise<void> {
 	const client = createClient();
 
-	const res = await client.send("initialize", {
+	const _res = await client.send("initialize", {
 		protocolVersion: "2024-11-05",
 		capabilities: {},
 		clientInfo: { name: "verify-tools", version: "1.0.0" },

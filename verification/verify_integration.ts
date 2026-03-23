@@ -6,7 +6,7 @@
  *   Screenshot → Network Intercept → Hot Restart → Logs → Stop
  */
 
-import fs from "fs";
+import fs from "node:fs";
 import {
 	callTool,
 	createClient,

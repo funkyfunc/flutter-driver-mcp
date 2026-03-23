@@ -7,7 +7,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:integration_test/integration_test.dart';
 import 'package:web_socket_channel/io.dart';
 import 'package:flutter/rendering.dart';
-import 'package:flutter/semantics.dart';
+import 'package:flutter/foundation.dart';
 
 // INJECT_IMPORT
 
@@ -189,7 +189,7 @@ void main() {
     await tester.pumpAndSettle();
 
     final wsUrl = const String.fromEnvironment('WS_URL', defaultValue: 'ws://localhost:8080');
-    print('MCP: Connecting to $wsUrl');
+    debugPrint('MCP: Connecting to $wsUrl');
     
     // Simple retry logic
     IOWebSocketChannel? channel;
@@ -199,17 +199,17 @@ void main() {
         await channel.ready;
         break;
       } catch (e) {
-        print('MCP: Connection failed, retrying in 1s... $e');
+        debugPrint('MCP: Connection failed, retrying in 1s... $e');
         await Future.delayed(const Duration(seconds: 1));
       }
     }
 
     if (channel == null) {
-      print('MCP: Could not connect to host.');
+      debugPrint('MCP: Could not connect to host.');
       return;
     }
 
-    print('MCP: Connected.');
+    debugPrint('MCP: Connected.');
     
     // Notify host we are ready
     channel.sink.add(jsonEncode({
@@ -219,7 +219,7 @@ void main() {
     }));
 
     await for (final message in channel.stream) {
-      print('MCP: Received $message');
+      debugPrint('MCP: Received $message');
       final map = jsonDecode(message as String) as Map<String, dynamic>;
       final id = map['id'];
       
@@ -287,7 +287,7 @@ void main() {
           'result': result ?? {'status': 'success'},
         }));
       } catch (e, stack) {
-        print('MCP: Error: $e');
+        debugPrint('MCP: Error: $e');
         channel.sink.add(jsonEncode({
           'jsonrpc': '2.0',
           'id': id,
@@ -367,7 +367,7 @@ _FinderResult _createFinder(Map<String, dynamic> params) {
     }
 
     String suggestionText = suggestions.isNotEmpty 
-      ? '\nSuggestions:\n - ' + suggestions.take(3).join('\n - ') 
+      ? '\nSuggestions:\n - ${suggestions.take(3).join('\n - ')}' 
       : '';
 
     throw 'WidgetNotFoundException: No widget found with type "$finderType" and params "$params"$suggestionText';
@@ -567,7 +567,7 @@ Future<Map<String, dynamic>> _handleAssertTextEquals(WidgetTester tester, Map<St
   if (widget is Text) {
     actualText = widget.data;
   } else if (widget is EditableText) {
-    actualText = widget.controller?.text;
+    actualText = widget.controller.text;
   } else if (widget is RichText) {
     actualText = widget.text.toPlainText();
   } else {
@@ -604,6 +604,7 @@ Future<Map<String, dynamic>> _handleAssertState(WidgetTester tester, Map<String,
   } else if (widget is Switch) {
     if (stateKey == 'value') actualValue = widget.value;
   } else if (widget is Radio) {
+    // ignore: deprecated_member_use
     if (stateKey == 'groupValue') actualValue = widget.groupValue;
     if (stateKey == 'value') actualValue = widget.value;
   } else if (widget is Slider) {
@@ -662,13 +663,12 @@ Map<String, dynamic> _handleInterceptNetwork(Map<String, dynamic> params) {
 }
 
 Future<Map<String, dynamic>> _handleExploreScreen(WidgetTester tester) async {
-  final binding = tester.binding;
   // Ensure semantics are enabled
-  final semanticsHandle = binding.pipelineOwner.ensureSemantics(); // Capture handle
+  final semanticsHandle = SemanticsBinding.instance.ensureSemantics();
   
   await tester.pumpAndSettle();
   
-  final semanticsOwner = binding.pipelineOwner.semanticsOwner;
+  final semanticsOwner = RendererBinding.instance.rootPipelineOwner.semanticsOwner;
   if (semanticsOwner == null) {
     semanticsHandle.dispose();
     return {'error': 'SemanticsOwner is null'};
@@ -693,17 +693,18 @@ Future<Map<String, dynamic>> _handleExploreScreen(WidgetTester tester) async {
 
 void _collectInteractiveSemantics(SemanticsNode node, List<Map<String, dynamic>> collection) {
   final data = node.getSemanticsData();
+  final fc = data.flagsCollection;
   
-  final isInteractive = data.hasFlag(SemanticsFlag.isButton) || 
-                        data.hasFlag(SemanticsFlag.isTextField) ||
-                        data.hasFlag(SemanticsFlag.isLink) ||
+  final isInteractive = fc.isButton || 
+                        fc.isTextField ||
+                        fc.isLink ||
                         data.hasAction(SemanticsAction.tap) ||
                         data.hasAction(SemanticsAction.longPress) ||
                         data.hasAction(SemanticsAction.setText) ||
-                        data.hasFlag(SemanticsFlag.hasCheckedState) ||
-                        data.hasFlag(SemanticsFlag.isSlider);
+                        fc.isChecked != ui.CheckedState.none ||
+                        fc.isSlider;
   
-  if (isInteractive && !data.hasFlag(SemanticsFlag.isHidden)) {
+  if (isInteractive && !fc.isHidden) {
       final json = <String, dynamic>{
         'id': node.id,
       };
@@ -713,12 +714,12 @@ void _collectInteractiveSemantics(SemanticsNode node, List<Map<String, dynamic>>
       if (data.hint.isNotEmpty) json['hint'] = data.hint;
       
       final flags = <String>[];
-      if (data.hasFlag(SemanticsFlag.isButton)) flags.add('isButton');
-      if (data.hasFlag(SemanticsFlag.isTextField)) flags.add('isTextField');
-      if (data.hasFlag(SemanticsFlag.hasCheckedState)) flags.add('hasCheckedState');
-      if (data.hasFlag(SemanticsFlag.isChecked)) flags.add('isChecked');
-      if (data.hasFlag(SemanticsFlag.isSelected)) flags.add('isSelected');
-      if (data.hasFlag(SemanticsFlag.isSlider)) flags.add('isSlider');
+      if (fc.isButton) flags.add('isButton');
+      if (fc.isTextField) flags.add('isTextField');
+      if (fc.isChecked != ui.CheckedState.none) flags.add('hasCheckedState');
+      if (fc.isChecked == ui.CheckedState.isTrue) flags.add('isChecked');
+      if (fc.isSelected == ui.Tristate.isTrue) flags.add('isSelected');
+      if (fc.isSlider) flags.add('isSlider');
       if (flags.isNotEmpty) json['flags'] = flags;
 
       final actions = <String>[];
@@ -739,14 +740,13 @@ void _collectInteractiveSemantics(SemanticsNode node, List<Map<String, dynamic>>
 }
 
 Future<Map<String, dynamic>> _handleGetAccessibilityTree(WidgetTester tester, Map<String, dynamic> params) async {
-  final binding = tester.binding;
   // Ensure semantics are enabled
-  final semanticsHandle = binding.pipelineOwner.ensureSemantics(); // Capture handle
+  final semanticsHandle = SemanticsBinding.instance.ensureSemantics();
   
   // Wait for the semantics tree to be generated
   await tester.pumpAndSettle();
   
-  final semanticsOwner = binding.pipelineOwner.semanticsOwner;
+  final semanticsOwner = RendererBinding.instance.rootPipelineOwner.semanticsOwner;
   if (semanticsOwner == null) {
     semanticsHandle.dispose(); // Dispose on error
     return {'error': 'SemanticsOwner is null'};
@@ -794,28 +794,27 @@ Map<String, dynamic> _serializeSemanticsNode(SemanticsNode node, {required bool 
 
   // Flags
   final flags = <String>[];
-  if (data.hasFlag(SemanticsFlag.hasCheckedState)) flags.add('hasCheckedState');
-  if (data.hasFlag(SemanticsFlag.isChecked)) flags.add('isChecked');
-  if (data.hasFlag(SemanticsFlag.isSelected)) flags.add('isSelected');
-  if (data.hasFlag(SemanticsFlag.isButton)) flags.add('isButton');
-  if (data.hasFlag(SemanticsFlag.isTextField)) flags.add('isTextField');
-  if (data.hasFlag(SemanticsFlag.isReadOnly)) flags.add('isReadOnly');
-  if (data.hasFlag(SemanticsFlag.isLink)) flags.add('isLink');
-  if (data.hasFlag(SemanticsFlag.isHeader)) flags.add('isHeader');
-  if (data.hasFlag(SemanticsFlag.isSlider)) flags.add('isSlider');
-  if (data.hasFlag(SemanticsFlag.isLiveRegion)) flags.add('isLiveRegion');
-  if (data.hasFlag(SemanticsFlag.isHidden)) flags.add('isHidden');
-  if (data.hasFlag(SemanticsFlag.isImage)) flags.add('isImage');
-  if (data.hasFlag(SemanticsFlag.isInMutuallyExclusiveGroup)) flags.add('isInMutuallyExclusiveGroup');
-  if (data.hasFlag(SemanticsFlag.scopesRoute)) flags.add('scopesRoute');
-  if (data.hasFlag(SemanticsFlag.namesRoute)) flags.add('namesRoute');
-  if (data.hasFlag(SemanticsFlag.isHidden)) flags.add('isHidden');
-  if (data.hasFlag(SemanticsFlag.isObscured)) flags.add('isObscured');
-  if (data.hasFlag(SemanticsFlag.isMultiline)) flags.add('isMultiline');
-  if (data.hasFlag(SemanticsFlag.isFocusable)) flags.add('isFocusable');
-  if (data.hasFlag(SemanticsFlag.isFocused)) flags.add('isFocused');
-  if (data.hasFlag(SemanticsFlag.isEnabled)) flags.add('isEnabled');
-  // if (data.hasFlag(SemanticsFlag.isInMutuallyExclusiveGroup)) flags.add('isInMutuallyExclusiveGroup'); // Already checked above
+  final fc = data.flagsCollection;
+  if (fc.isChecked != ui.CheckedState.none) flags.add('hasCheckedState');
+  if (fc.isChecked == ui.CheckedState.isTrue) flags.add('isChecked');
+  if (fc.isSelected == ui.Tristate.isTrue) flags.add('isSelected');
+  if (fc.isButton) flags.add('isButton');
+  if (fc.isTextField) flags.add('isTextField');
+  if (fc.isReadOnly) flags.add('isReadOnly');
+  if (fc.isLink) flags.add('isLink');
+  if (fc.isHeader) flags.add('isHeader');
+  if (fc.isSlider) flags.add('isSlider');
+  if (fc.isLiveRegion) flags.add('isLiveRegion');
+  if (fc.isHidden) flags.add('isHidden');
+  if (fc.isImage) flags.add('isImage');
+  if (fc.isInMutuallyExclusiveGroup) flags.add('isInMutuallyExclusiveGroup');
+  if (fc.scopesRoute) flags.add('scopesRoute');
+  if (fc.namesRoute) flags.add('namesRoute');
+  if (fc.isObscured) flags.add('isObscured');
+  if (fc.isMultiline) flags.add('isMultiline');
+  if (fc.isFocused != ui.Tristate.none) flags.add('isFocusable');
+  if (fc.isFocused == ui.Tristate.isTrue) flags.add('isFocused');
+  if (fc.isEnabled == ui.Tristate.isTrue) flags.add('isEnabled');
   
   if (flags.isNotEmpty) json['flags'] = flags;
 
@@ -920,7 +919,7 @@ Map<String, dynamic> _serializeElement(Element element, {required bool summaryOn
   } else if (widget is Tooltip) {
     json['message'] = widget.message;
   } else if (widget is EditableText) {
-    json['value'] = widget.controller?.text;
+    json['value'] = widget.controller.text;
   } else if (widget is Icon) {
     json['icon'] = widget.icon.toString();
   } else if (widget is Image) {

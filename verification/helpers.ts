@@ -6,9 +6,9 @@
  * that need a running server (i.e., everything except verify_harness_syntax).
  */
 
-import { type ChildProcess, spawn } from "child_process";
-import path from "path";
-import { fileURLToPath } from "url";
+import { type ChildProcess, spawn } from "node:child_process";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 
 // ─── Types ──────────────────────────────────────────────────────────────────
 
@@ -73,9 +73,9 @@ export function createClient(
 			try {
 				const msg = JSON.parse(line) as McpResponse;
 				if (msg.id !== undefined && pending.has(msg.id)) {
-					const cb = pending.get(msg.id)!;
+					const cb = pending.get(msg.id);
 					pending.delete(msg.id);
-					cb(msg);
+					cb?.(msg);
 				}
 			} catch {
 				// Non-JSON output (build logs, etc.)
@@ -89,7 +89,7 @@ export function createClient(
 	): Promise<McpResponse> {
 		const id = msgId++;
 		const payload = JSON.stringify({ jsonrpc: "2.0", id, method, params });
-		server.stdin?.write(payload + "\n");
+		server.stdin?.write(`${payload}\n`);
 
 		return new Promise<McpResponse>((resolve) => {
 			pending.set(id, resolve);

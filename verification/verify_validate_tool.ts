@@ -1,8 +1,8 @@
-import { spawn } from "child_process";
-import fs from "fs/promises";
-import os from "os";
-import path from "path";
-import { fileURLToPath } from "url";
+import { spawn } from "node:child_process";
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -75,7 +75,7 @@ async function runTest(): Promise<void> {
 	let msgId = 1;
 	function send(method: string, params: Record<string, unknown> = {}): void {
 		const msg = { jsonrpc: "2.0", id: msgId++, method, params };
-		server.stdin.write(JSON.stringify(msg) + "\n");
+		server.stdin.write(`${JSON.stringify(msg)}\n`);
 	}
 
 	server.stdout.on("data", async (data: Buffer) => {

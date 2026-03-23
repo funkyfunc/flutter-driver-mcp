@@ -1,3 +1,6 @@
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import {
@@ -5,9 +8,6 @@ import {
 	ListToolsRequestSchema,
 } from "@modelcontextprotocol/sdk/types.js";
 import { execa } from "execa";
-import fs from "fs/promises";
-import os from "os";
-import path from "path";
 import { type WebSocket, WebSocketServer } from "ws";
 
 import { getHarnessCode } from "./harness.js";
@@ -30,7 +30,6 @@ import {
 	type ToolResponse,
 	textResponse,
 	toErrorMessage,
-	toExecErrorMessage,
 } from "./types.js";
 
 // ─── Server State ───────────────────────────────────────────────────────────
@@ -65,7 +64,7 @@ async function sendRpc(
 	const id = `req_${nextMsgId++}`;
 	return new Promise<unknown>((resolve, reject) => {
 		pendingRequests.set(id, { resolve, reject });
-		session!.ws!.send(JSON.stringify({ jsonrpc: "2.0", method, params, id }));
+		session?.ws?.send(JSON.stringify({ jsonrpc: "2.0", method, params, id }));
 
 		setTimeout(() => {
 			if (pendingRequests.has(id)) {
@@ -84,7 +83,7 @@ function requireSession(): AppSession {
 // ─── WebSocket Server ───────────────────────────────────────────────────────
 
 async function ensureWsServer(): Promise<number> {
-	if (wsServer) return wsPort!;
+	if (wsServer) return wsPort ?? 0;
 
 	return new Promise<number>((resolve) => {
 		wsServer = new WebSocketServer({ port: 0 });
@@ -106,14 +105,15 @@ async function ensureWsServer(): Promise<number> {
 					const msg = JSON.parse(data.toString()) as JsonRpcResponse;
 
 					if (msg.id && pendingRequests.has(String(msg.id))) {
-						const pending = pendingRequests.get(String(msg.id))!;
-						pendingRequests.delete(String(msg.id));
+						const key = String(msg.id);
+						const pending = pendingRequests.get(key);
+						pendingRequests.delete(key);
 						if (msg.error) {
-							pending.reject(
+							pending?.reject(
 								new Error(msg.error.message || "Unknown error from device"),
 							);
 						} else {
-							pending.resolve(msg.result);
+							pending?.resolve(msg.result);
 						}
 					}
 
@@ -202,8 +202,8 @@ function writeDaemonCommand(
 	params: Record<string, unknown>,
 ): void {
 	const s = requireSession();
-	const cmd = JSON.stringify([{ method, params, id: nextMsgId++ }]) + "\n";
-	s.process.stdin!.write(cmd);
+	const cmd = `${JSON.stringify([{ method, params, id: nextMsgId++ }])}\n`;
+	s.process.stdin?.write(cmd);
 }
 
 function parseDaemonEvents(raw: string): void {
