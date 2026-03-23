@@ -1,34 +1,50 @@
 {
-  "name": "flutter-pilot-mcp",
-  "version": "1.0.0",
-  "description": "An MCP server that lets AI agents drive Flutter apps — tap, type, scroll, assert, and screenshot live UIs via integration_test.",
-  "author": "funkyfunc",
-  "license": "MIT",
-  "repository": {
-    "type": "git",
-    "url": "https://github.com/funkyfunc/flutter-pilot-mcp.git"
-  },
-  "type": "module",
-  "main": "dist/src/index.js",
-  "scripts": {
-    "build": "rm -rf dist && tsc && cp src/harness.dart dist/src/ && npm run verify-harness",
-    "start": "node dist/src/index.js",
-    "watch": "tsc --watch",
-    "verify-harness": "node dist/verification/verify_harness_syntax.js",
-    "verify-tools": "node dist/verification/verify_tools.js",
-    "verify-integration": "node dist/verification/verify_integration.js",
-    "verify-validate": "node dist/verification/verify_validate_tool.js"
-  },
-  "keywords": ["mcp", "flutter", "testing", "ai", "llm", "integration-test", "model-context-protocol"],
-  "dependencies": {
-    "@modelcontextprotocol/sdk": "^1.25.0",
-    "execa": "^9.6.1",
-    "ws": "^8.18.3",
-    "zod": "^4.2.0"
-  },
-  "devDependencies": {
-    "@types/node": "^25.0.2",
-    "@types/ws": "^8.18.1",
-    "typescript": "^5.9.3"
-  }
+	"name": "flutter-pilot-mcp",
+	"version": "1.0.0",
+	"description": "An MCP server that lets AI agents drive Flutter apps — tap, type, scroll, assert, and screenshot live UIs via integration_test.",
+	"author": "funkyfunc",
+	"license": "MIT",
+	"repository": {
+		"type": "git",
+		"url": "https://github.com/funkyfunc/flutter-pilot-mcp.git"
+	},
+	"type": "module",
+	"main": "dist/src/index.js",
+	"scripts": {
+		"build": "tsup",
+		"start": "node dist/src/index.js",
+		"dev": "tsx watch src/index.ts",
+		"lint": "biome check .",
+		"lint:fix": "biome check --write .",
+		"format": "biome format . --write",
+		"typecheck": "tsc --noEmit",
+		"validate": "npm run lint:fix && npm run typecheck && npm run format && npm run build",
+		"verify-harness": "tsx verification/verify_harness_syntax.ts",
+		"verify-tools": "tsx verification/verify_tools.ts",
+		"verify-integration": "tsx verification/verify_integration.ts",
+		"verify-validate": "tsx verification/verify_validate_tool.js"
+	},
+	"keywords": [
+		"mcp",
+		"flutter",
+		"testing",
+		"ai",
+		"llm",
+		"integration-test",
+		"model-context-protocol"
+	],
+	"dependencies": {
+		"@modelcontextprotocol/sdk": "^1.25.0",
+		"execa": "^9.6.1",
+		"ws": "^8.18.3",
+		"zod": "^4.2.0"
+	},
+	"devDependencies": {
+		"@biomejs/biome": "^2.4.8",
+		"@types/node": "^25.0.2",
+		"@types/ws": "^8.18.1",
+		"tsup": "^8.5.1",
+		"tsx": "^4.21.0",
+		"typescript": "^5.9.3"
+	}
 }

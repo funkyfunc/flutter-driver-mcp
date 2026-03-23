@@ -73,4 +73,5 @@ To minimize LLM latency and context usage, several optimizations are baked into 
 When you make changes to the source code, you must build the TypeScript code, as the node runner uses `dist/src/index.js`. 
 
 - **Build**: Run `npm run build` to compile the TypeScript code and correctly copy `harness.dart` into the `dist/` folder.
+- **Validation**: **CRITICAL**: After making any changes, you MUST run `npm run validate` to ensure the code is formatted, type-checked, and builds correctly.
 - **Automated Tests**: The repo includes a `test_app` (a simple Flutter app). Run `npm run verify-integration` to boot it up and run assertions on all the MCP tools. If you add a new tool, consider adding a verification step in the `verification/` scripts.
