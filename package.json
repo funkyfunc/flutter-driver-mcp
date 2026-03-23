@@ -15,12 +15,9 @@
     "start": "node dist/src/index.js",
     "watch": "tsc --watch",
     "verify-harness": "node dist/verification/verify_harness_syntax.js",
-    "verify": "node dist/verification/verify.js",
-    "verify-integration": "node dist/verification/verify_integration.js",
-    "verify-validate": "node dist/verification/verify_validate.js",
     "verify-tools": "node dist/verification/verify_tools.js",
-    "verify-scroll": "node dist/verification/verify_scroll.js",
-    "verify-screenshot": "node dist/verification/verify_screenshot.js"
+    "verify-integration": "node dist/verification/verify_integration.js",
+    "verify-validate": "node dist/verification/verify_validate_tool.js"
   },
   "keywords": ["mcp", "flutter", "testing", "ai", "llm", "integration-test", "model-context-protocol"],
   "dependencies": {

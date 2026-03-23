@@ -1,42 +1,70 @@
-import { spawn } from "child_process";
-import path from "path";
-import { fileURLToPath } from "url";
+/**
+ * Smoke test: verifies the tool list schema is correct.
+ * Does NOT boot the test app — runs in under a second.
+ */
 
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const serverPath = path.join(__dirname, "../src/index.js");
+import { createClient, initClient, type McpTool } from "./helpers.js";
 
-const server = spawn("node", [serverPath], { stdio: ["pipe", "pipe", "inherit"] });
+const EXPECTED_TOOLS = [
+  "start_app",
+  "stop_app",
+  "pilot_hot_restart",
+  "list_devices",
+  "tap",
+  "enter_text",
+  "scroll",
+  "scroll_until_visible",
+  "wait_for",
+  "get_widget_tree",
+  "get_accessibility_tree",
+  "explore_screen",
+  "take_screenshot",
+  "assert_exists",
+  "assert_not_exists",
+  "assert_text_equals",
+  "assert_state",
+  "navigate_to",
+  "intercept_network",
+  "simulate_background",
+  "set_network_status",
+  "read_logs",
+  "validate_project",
+];
 
-server.stdout.on("data", (data) => {
-    const lines = data.toString().split("\n");
-    for (const line of lines) {
-        if (!line.trim()) continue;
-        try {
-            const json = JSON.parse(line);
-            if (json.id === 1) {
-                // List tools response
-                const tools = json.result.tools;
-                const hasScrollUntilVisible = tools.some((t: any) => t.name === "scroll_until_visible");
-                const getWidgetTree = tools.find((t: any) => t.name === "get_widget_tree");
-                const hasSummaryOnly = getWidgetTree.inputSchema.properties.summaryOnly !== undefined;
-                
-                if (hasScrollUntilVisible && hasSummaryOnly) {
-                    console.log("✅ scroll_until_visible found and get_widget_tree has summaryOnly");
-                    process.exit(0);
-                } else {
-                    console.error("❌ Tools verification failed");
-                    console.log(JSON.stringify(tools, null, 2));
-                    process.exit(1);
-                }
-            }
-        } catch (e) {}
+async function main(): Promise<void> {
+  const client = createClient();
+
+  const res = await client.send("initialize", {
+    protocolVersion: "2024-11-05",
+    capabilities: {},
+    clientInfo: { name: "verify-tools", version: "1.0.0" },
+  });
+
+  const listRes = await client.send("tools/list", {});
+  const tools = listRes.result?.tools ?? [];
+  const toolNames = new Set(tools.map((t: McpTool) => t.name));
+
+  let passed = true;
+  for (const expected of EXPECTED_TOOLS) {
+    if (!toolNames.has(expected)) {
+      console.error(`❌ Missing tool: ${expected}`);
+      passed = false;
     }
-});
+  }
 
-server.stdin.write(JSON.stringify({
-    jsonrpc: "2.0",
-    id: 1,
-    method: "tools/list",
-    params: {}
-}) + "\n");
+  // Spot-check a specific property
+  const getWidgetTree = tools.find((t: McpTool) => t.name === "get_widget_tree");
+  if (!getWidgetTree?.inputSchema?.properties?.summaryOnly) {
+    console.error("❌ get_widget_tree missing 'summaryOnly' property");
+    passed = false;
+  }
 
+  if (passed) {
+    console.log(`✅ All ${EXPECTED_TOOLS.length} expected tools found with correct schemas.`);
+  }
+
+  client.cleanup();
+  process.exit(passed ? 0 : 1);
+}
+
+main();

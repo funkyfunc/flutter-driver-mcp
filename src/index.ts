@@ -1,1032 +1,714 @@
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
-import {
-  CallToolRequestSchema,
-  ListToolsRequestSchema,
-} from "@modelcontextprotocol/sdk/types.js";
+import { CallToolRequestSchema, ListToolsRequestSchema } from "@modelcontextprotocol/sdk/types.js";
 import { WebSocketServer, WebSocket } from "ws";
 import { execa } from "execa";
 import fs from "fs/promises";
 import path from "path";
 import os from "os";
-import { getHarnessCode } from "./harness.js";
 
-// --- State ---
-let activeProcess: any | null = null;
-let activeWs: WebSocket | null = null;
+import { getHarnessCode } from "./harness.js";
+import { TOOL_DEFINITIONS } from "./tools.js";
+import {
+  type AppSession,
+  type FinderPayload,
+  type FlutterDaemonEvent,
+  type FlutterDevice,
+  type JsonRpcResponse,
+  type ScreenshotResult,
+  type ToolArgs,
+  type ToolHandler,
+  type ToolResponse,
+  APP_LAUNCH_TIMEOUT_MS,
+  GRACEFUL_STOP_TIMEOUT_MS,
+  MAX_LOG_LINES,
+  RPC_TIMEOUT_MS,
+  SCREENSHOT_DIR,
+  textResponse,
+  jsonResponse,
+  toErrorMessage,
+  toExecErrorMessage,
+} from "./types.js";
+
+// ─── Server State ───────────────────────────────────────────────────────────
+
+let session: AppSession | null = null;
 let wsServer: WebSocketServer | null = null;
 let wsPort: number | null = null;
-let currentObservatoryUri: string | null = null;
-let currentAppId: string | null = null;
-let currentProjectPath: string | null = null;
-let currentDeviceId: string | null = null;
-const logBuffer: string[] = []; // Store logs in memory
-const MAX_LOG_BUFFER = 1000;
-
-// Map request ID to promise resolvers
-const pendingRequests = new Map<
-  string | number,
-  { resolve: (val: any) => void; reject: (err: any) => void }
->();
-let nextMsgId = 1;
 let appStartedResolver: (() => void) | null = null;
 
-// --- Helper Functions ---
-function addToLogBuffer(message: string) {
-    if (logBuffer.length >= MAX_LOG_BUFFER) {
-        logBuffer.shift(); // Remove oldest
-    }
-    logBuffer.push(message);
+const logBuffer: string[] = [];
+const pendingRequests = new Map<string, { resolve: (val: unknown) => void; reject: (err: Error) => void }>();
+let nextMsgId = 1;
+
+// ─── Log Buffer ─────────────────────────────────────────────────────────────
+
+function appendLog(message: string): void {
+  if (logBuffer.length >= MAX_LOG_LINES) logBuffer.shift();
+  logBuffer.push(message);
 }
 
-// Send JSON-RPC to the Dart harness
-async function sendRpc(method: string, params: any) {
-  if (!activeWs) throw new Error("App not connected. Use start_app first.");
+// ─── JSON-RPC Transport ─────────────────────────────────────────────────────
+
+async function sendRpc(method: string, params: Record<string, unknown>): Promise<unknown> {
+  if (!session?.ws) throw new Error("App not connected. Use start_app first.");
+
   const id = `req_${nextMsgId++}`;
-  return new Promise((resolve, reject) => {
+  return new Promise<unknown>((resolve, reject) => {
     pendingRequests.set(id, { resolve, reject });
-    activeWs!.send(JSON.stringify({ jsonrpc: "2.0", method, params, id }));
-    
-    // Default timeout 30s
+    session!.ws!.send(JSON.stringify({ jsonrpc: "2.0", method, params, id }));
+
     setTimeout(() => {
       if (pendingRequests.has(id)) {
         pendingRequests.delete(id);
-        reject(new Error(`Timeout waiting for device response to ${method}`));
+        reject(new Error(`Timeout waiting for device response to '${method}'`));
       }
-    }, 30000);
+    }, RPC_TIMEOUT_MS);
   });
 }
 
-// Start WebSocket Server
-async function startWsServer(): Promise<number> {
+function requireSession(): AppSession {
+  if (!session) throw new Error("App is not running. Use start_app first.");
+  return session;
+}
+
+// ─── WebSocket Server ───────────────────────────────────────────────────────
+
+async function ensureWsServer(): Promise<number> {
   if (wsServer) return wsPort!;
-  
-  return new Promise((resolve) => {
-    wsServer = new WebSocketServer({ port: 0 }); // 0 = random free port
+
+  return new Promise<number>((resolve) => {
+    wsServer = new WebSocketServer({ port: 0 });
+
     wsServer.on("listening", () => {
       const addr = wsServer?.address();
-      if (typeof addr === 'object' && addr !== null) {
+      if (typeof addr === "object" && addr !== null) {
         wsPort = addr.port;
         resolve(wsPort);
       }
     });
 
-    wsServer.on("connection", (ws) => {
+    wsServer.on("connection", (ws: WebSocket) => {
       console.error("Device connected via WebSocket");
-      activeWs = ws;
-      
-      ws.on("message", (data) => {
+      if (session) session.ws = ws;
+
+      ws.on("message", (data: Buffer) => {
         try {
-          const msg = JSON.parse(data.toString());
-          
-          // Handle responses
-          if (msg.id && pendingRequests.has(msg.id)) {
-            const { resolve, reject } = pendingRequests.get(msg.id)!;
-            pendingRequests.delete(msg.id);
+          const msg = JSON.parse(data.toString()) as JsonRpcResponse;
+
+          if (msg.id && pendingRequests.has(String(msg.id))) {
+            const pending = pendingRequests.get(String(msg.id))!;
+            pendingRequests.delete(String(msg.id));
             if (msg.error) {
-              reject(new Error(msg.error.message || "Unknown error from device"));
+              pending.reject(new Error(msg.error.message || "Unknown error from device"));
             } else {
-              resolve(msg.result);
+              pending.resolve(msg.result);
             }
           }
-          
-          // Handle notifications
-          if (msg.method === 'app.started') {
-            if (appStartedResolver) {
-              appStartedResolver();
-              appStartedResolver = null;
-            }
+
+          if (msg.method === "app.started" && appStartedResolver) {
+            appStartedResolver();
+            appStartedResolver = null;
           }
-          
-        } catch (e) {
-          console.error("Error parsing WS message:", e);
+        } catch {
+          console.error("Error parsing WebSocket message");
         }
       });
-      
+
       ws.on("close", () => {
         console.error("Device disconnected");
-        activeWs = null;
+        if (session) session.ws = null;
       });
     });
   });
 }
 
-// Helper to extract package name from pubspec.yaml
-async function getPackageName(projectPath: string): Promise<string | undefined> {
-    try {
-        const pubspecPath = path.join(projectPath, "pubspec.yaml");
-        const content = await fs.readFile(pubspecPath, "utf-8");
-        const match = content.match(/^name:\s+(\S+)/m);
-        return match ? match[1] : undefined;
-    } catch (e) {
-        return undefined;
-    }
-}
+// ─── Selector Parsing ───────────────────────────────────────────────────────
 
-// Helper to parse simplified target strings into finderType objects
-// Formats:
-// "#myKey" -> { finderType: "byKey", key: "myKey" }
-// "text='Submit'" -> { finderType: "byText", text: "Submit" }
-// "type='ElevatedButton'" -> { finderType: "byType", type: "ElevatedButton" }
-// "tooltip='Back'" -> { finderType: "byTooltip", tooltip: "Back" }
-function parseTarget(target: string): any {
-    if (target.startsWith("#")) {
-        return { finderType: "byKey", key: target.substring(1) };
-    }
-    
-    const parts = target.split("=");
-    if (parts.length >= 2) {
-        const key = parts[0].trim();
-        const value = parts.slice(1).join("=").trim().replace(/^['"]|['"]$/g, ''); // Remove outer quotes
-        switch(key) {
-            case 'text': return { finderType: "byText", text: value };
-            case 'type': return { finderType: "byType", type: value };
-            case 'tooltip': return { finderType: "byTooltip", tooltip: value };
-            case 'id': return { finderType: "byId", id: value };
-        }
-    }
-    
-    throw new Error(`Invalid target string: '\${target}'. Use '#key', 'text="text"', 'type="type"', or 'tooltip="tooltip"'.`);
-}
-
-// --- MCP Server Setup ---
-
-const server = new Server(
-  {
-    name: "flutter-test-pilot",
-    version: "1.0.0",
-  },
-  {
-    capabilities: {
-      tools: {},
-    },
+function parseTarget(target: string): FinderPayload {
+  if (target.startsWith("#")) {
+    return { finderType: "byKey", key: target.substring(1) };
   }
-);
 
-// Define Tools
-server.setRequestHandler(ListToolsRequestSchema, async () => {
+  const eqIndex = target.indexOf("=");
+  if (eqIndex > 0) {
+    const prefix = target.substring(0, eqIndex).trim();
+    const value = target.substring(eqIndex + 1).trim().replace(/^['"]|['"]$/g, "");
+
+    switch (prefix) {
+      case "text":    return { finderType: "byText", text: value };
+      case "type":    return { finderType: "byType", type: value };
+      case "tooltip": return { finderType: "byTooltip", tooltip: value };
+      case "id":      return { finderType: "byId", id: value };
+    }
+  }
+
+  throw new Error(
+    `Invalid target string: '${target}'. ` +
+    `Use '#key', 'text="text"', 'type="type"', or 'tooltip="tooltip"'.`
+  );
+}
+
+/** Resolve target in args if present, returning a clean payload for the harness. */
+function resolveTargetArgs(args: ToolArgs): Record<string, unknown> {
+  const payload = { ...args };
+  if (typeof payload.target === "string") {
+    const finder = parseTarget(payload.target);
+    delete payload.target;
+    Object.assign(payload, finder);
+  }
+  return payload;
+}
+
+// ─── Pubspec Helpers ────────────────────────────────────────────────────────
+
+async function readPackageName(projectPath: string): Promise<string | undefined> {
+  try {
+    const content = await fs.readFile(path.join(projectPath, "pubspec.yaml"), "utf-8");
+    const match = content.match(/^name:\s+(\S+)/m);
+    return match?.[1];
+  } catch {
+    return undefined;
+  }
+}
+
+// ─── Flutter Daemon Helpers ─────────────────────────────────────────────────
+
+function writeDaemonCommand(method: string, params: Record<string, unknown>): void {
+  const s = requireSession();
+  const cmd = JSON.stringify([{ method, params, id: nextMsgId++ }]) + "\n";
+  s.process.stdin!.write(cmd);
+}
+
+function parseDaemonEvents(raw: string): void {
+  for (const line of raw.split("\n")) {
+    const trimmed = line.trim();
+    if (!trimmed.startsWith("[") && !trimmed.startsWith("{")) continue;
+
+    try {
+      let events = JSON.parse(trimmed) as FlutterDaemonEvent | FlutterDaemonEvent[];
+      if (!Array.isArray(events)) events = [events];
+
+      for (const event of events) {
+        if (event.event === "app.debugPort" && event.params?.wsUri) {
+          if (session) session.observatoryUri = event.params.wsUri as string;
+          console.error(`Captured Observatory URI: ${event.params.wsUri}`);
+        }
+        if (event.event === "app.started" && event.params?.appId) {
+          if (session) session.appId = event.params.appId as string;
+          console.error(`Captured App ID: ${event.params.appId}`);
+        }
+      }
+    } catch {
+      // Non-JSON lines are expected (build output, etc.)
+    }
+  }
+}
+
+// ─── Tool Handlers ──────────────────────────────────────────────────────────
+
+// -- Lifecycle --
+
+async function handleStartApp(args: ToolArgs): Promise<ToolResponse> {
+  const projectPath = args.project_path as string;
+  const deviceId = (args.device_id as string) || null;
+
+  // Reset
+  logBuffer.length = 0;
+
+  // 1. Start WebSocket server
+  const port = await ensureWsServer();
+
+  // 2. Inject harness
+  const testDir = path.join(projectPath, "integration_test");
+  await fs.mkdir(testDir, { recursive: true });
+
+  const packageName = await readPackageName(projectPath);
+  await fs.writeFile(path.join(testDir, "mcp_harness.dart"), getHarnessCode(packageName));
+
+  // 3. Spawn Flutter
+  const flutterArgs = [
+    "run", "--machine",
+    "--target", "integration_test/mcp_harness.dart",
+    "--dart-define", `WS_URL=ws://localhost:${port}`,
+    ...(deviceId ? ["-d", deviceId] : []),
+  ];
+
+  console.error(`Spawning: flutter ${flutterArgs.join(" ")}`);
+
+  if (session) session.process.kill();
+
+  const proc = execa("flutter", flutterArgs, {
+    cwd: projectPath,
+    stdio: ["pipe", "pipe", "pipe"],
+  });
+  proc.catch(() => {}); // Prevent unhandled rejection on kill
+
+  session = {
+    process: proc,
+    ws: null,
+    appId: null,
+    observatoryUri: null,
+    projectPath,
+    deviceId,
+  };
+
+  // Stream and parse stdout
+  proc.stdout?.on("data", (chunk: Buffer) => {
+    const text = chunk.toString();
+    console.error(`[Flutter]: ${text}`);
+    appendLog(text);
+    parseDaemonEvents(text);
+  });
+
+  proc.stderr?.on("data", (chunk: Buffer) => {
+    const text = chunk.toString();
+    console.error(`[Flutter Err]: ${text}`);
+    appendLog(text);
+  });
+
+  proc.on("exit", (code: number | null) => {
+    console.error(`Flutter process exited with code ${code}`);
+    session = null;
+  });
+
+  // 4. Wait for harness connection
+  console.error("Waiting for app to connect...");
+  await new Promise<void>((resolve, reject) => {
+    appStartedResolver = resolve;
+    setTimeout(() => reject(new Error("Timeout waiting for app to start")), APP_LAUNCH_TIMEOUT_MS);
+  });
+
+  return textResponse(`App started and connected! (Injected harness with package: ${packageName ?? "unknown"})`);
+}
+
+async function handleStopApp(): Promise<ToolResponse> {
+  // 1. Gracefully stop via flutter daemon protocol
+  if (session?.appId) {
+    try {
+      writeDaemonCommand("app.stop", { appId: session.appId });
+      console.error("Sent app.stop command to Flutter daemon.");
+
+      await new Promise<void>((resolve) => {
+        const timeout = setTimeout(() => resolve(), GRACEFUL_STOP_TIMEOUT_MS);
+        session?.process.on("exit", () => {
+          clearTimeout(timeout);
+          resolve();
+        });
+      });
+    } catch {
+      console.error("Error sending app.stop");
+    }
+  }
+
+  // 2. Force kill if still alive
+  if (session) {
+    try { session.process.kill("SIGKILL"); } catch { /* already dead */ }
+  }
+
+  // 3. Close WebSocket
+  session?.ws?.close();
+
+  // 4. Kill orphaned processes
+  if (session?.projectPath) {
+    const name = path.basename(session.projectPath);
+    await execa("pkill", ["-f", `${name}.*flutter`], { reject: false });
+    await execa("pkill", ["-f", `${name}.app`], { reject: false });
+  }
+
+  session = null;
+
+  // 5. Clean up temp screenshots
+  const tempDir = path.join(os.tmpdir(), SCREENSHOT_DIR);
+  try { await fs.rm(tempDir, { recursive: true, force: true }); } catch { /* ignore */ }
+
+  return textResponse("App stopped.");
+}
+
+async function handlePilotHotRestart(): Promise<ToolResponse> {
+  const s = requireSession();
+  if (!s.appId) throw new Error("App ID not available. Cannot restart.");
+
+  writeDaemonCommand("app.restart", { appId: s.appId, fullRestart: true });
+  console.error("Sent hot restart command.");
+  return textResponse("Hot restart command sent.");
+}
+
+async function handleListDevices(): Promise<ToolResponse> {
+  const { stdout } = await execa("flutter", ["devices", "--machine"]);
+  const devices = JSON.parse(stdout) as FlutterDevice[];
+
+  if (devices.length === 0) {
+    return textResponse(
+      "No devices found. Make sure a simulator/emulator is running or a physical device is connected."
+    );
+  }
+
+  const summary = devices
+    .map((d) => `• ${d.name} (${d.id}) — ${d.targetPlatform}, ${d.isSupported ? "✅ supported" : "❌ unsupported"}`)
+    .join("\n");
+
+  return textResponse(
+    `Found ${devices.length} device(s):\n${summary}\n\n` +
+    "Use the device ID (e.g. 'macos', 'chrome', or a simulator UUID) with start_app."
+  );
+}
+
+// -- Inspection --
+
+async function handleTakeScreenshot(args: ToolArgs): Promise<ToolResponse> {
+  const s = requireSession();
+  const savePath = args.save_path as string | undefined;
+  const screenshotType = (args.type as string) || "app";
+
+  // App-mode: render from Flutter frame directly (most reliable)
+  if (screenshotType === "app") {
+    const result = (await sendRpc("screenshot", {})) as ScreenshotResult;
+    if (result.error) throw new Error(result.error);
+
+    if (savePath) {
+      await fs.writeFile(savePath, Buffer.from(result.data, "base64"));
+      return textResponse(`Screenshot saved to ${savePath}`);
+    }
+    return {
+      content: [
+        { type: "text", text: "Screenshot captured:" },
+        { type: "image", data: result.data, mimeType: "image/png" },
+      ],
+    };
+  }
+
+  // Device/Skia mode: use flutter CLI screenshot
+  if (!s.observatoryUri) {
+    throw new Error("Observatory URI not available. Screenshot requires a debug/profile build with VM service enabled.");
+  }
+
+  const tempDir = path.join(os.tmpdir(), SCREENSHOT_DIR);
+  await fs.mkdir(tempDir, { recursive: true });
+  const tempPath = path.join(tempDir, `screenshot_${Date.now()}.png`);
+
+  const screenshotArgs = ["screenshot", `--type=${screenshotType}`, "-o", tempPath];
+  if (screenshotType !== "device") screenshotArgs.push(`--vm-service-url=${s.observatoryUri}`);
+  if (s.deviceId) screenshotArgs.push("-d", s.deviceId);
+
+  console.error(`Taking screenshot via: flutter ${screenshotArgs.join(" ")}`);
+
+  try {
+    await execa("flutter", screenshotArgs, { cwd: s.projectPath });
+  } catch (flutterErr) {
+    if (s.deviceId === "macos" && screenshotType === "device") {
+      console.error("Flutter screenshot failed, falling back to macOS screencapture...");
+      await execa("screencapture", ["-x", tempPath]);
+    } else {
+      throw flutterErr;
+    }
+  }
+
+  await fs.access(tempPath);
+
+  if (savePath) {
+    await fs.copyFile(tempPath, savePath);
+    return textResponse(`Screenshot saved to ${savePath}`);
+  }
+
+  const buffer = await fs.readFile(tempPath);
+  await fs.unlink(tempPath);
   return {
-    tools: [
-      {
-        name: "start_app",
-        description: "Injects the harness and starts the Flutter app in test mode.",
-        inputSchema: {
-          type: "object",
-          properties: {
-            project_path: { type: "string", description: "Absolute path to the Flutter project root" },
-            device_id: { type: "string", description: "Device ID (e.g., 'macos', 'chrome', or a simulator ID)" },
-          },
-          required: ["project_path"],
-        },
-      },
-      {
-        name: "stop_app",
-        description: "Stops the currently running Flutter app and cleans up.",
-        inputSchema: {
-          type: "object",
-          properties: {},
-        },
-      },
-      {
-        name: "pilot_hot_restart",
-        description: "Performs a hot restart of the currently running app session started by this server. Prefer using the official MCP 'hot_restart' if connected to DTD.",
-        inputSchema: {
-          type: "object",
-          properties: {},
-        },
-      },
-      {
-        name: "simulate_background",
-        description: "Simulates the app going into the background and coming back to the foreground.",
-        inputSchema: {
-          type: "object",
-          properties: {
-             duration_ms: { type: "number", description: "How long to keep the app in the background (default: 2000)" }
-          },
-        },
-      },
-      {
-        name: "set_network_status",
-        description: "Simulates network connectivity changes (macOS/iOS Simulator only right now).",
-        inputSchema: {
-          type: "object",
-          properties: {
-             wifi: { type: "boolean", description: "Enable or disable WiFi" }
-          },
-          required: ["wifi"],
-        },
-      },
-      {
-        name: "read_logs",
-        description: "Reads the last N lines from the app's stdout/stderr.",
-        inputSchema: {
-          type: "object",
-          properties: {
-            lines: { type: "number", description: "Number of lines to read (default 50)" }
-          },
-        },
-      },
-      {
-        name: "validate_project",
-        description: "Checks and optionally fixes project prerequisites (dependencies, permissions).",
-        inputSchema: {
-          type: "object",
-          properties: {
-            project_path: { type: "string", description: "Absolute path to the Flutter project root" },
-            auto_fix: { type: "boolean", description: "Whether to automatically apply fixes" },
-          },
-          required: ["project_path"],
-        },
-      },
-      {
-        name: "tap",
-        description: "Taps on a widget identified by the target string.",
-        inputSchema: {
-          type: "object",
-          properties: {
-            target: { type: "string", description: "Target string (e.g. '#loginBtn', 'text=\"Submit\"', 'type=\"ElevatedButton\"', 'id=\"123\"')" },
-            // Legacy fallbacks
-            finderType: { type: "string" }, key: { type: "string" }, text: { type: "string" }, tooltip: { type: "string" }, type: { type: "string" }
-          },
-        },
-      },
-      {
-        name: "enter_text",
-        description: "Enters text into a widget found by the target string.",
-        inputSchema: {
-          type: "object",
-          properties: {
-            text: { type: "string", description: "Text to enter" },
-            target: { type: "string", description: "Target string (e.g. '#loginBtn', 'text=\"Submit\"', 'type=\"ElevatedButton\"', 'id=\"123\"')" },
-            action: { 
-                type: "string", 
-                description: "Optional TextInputAction to perform after entering text (e.g. 'done', 'search', 'next', 'go', 'send')." 
-            },
-            // Legacy
-            finderType: { type: "string" }, key: { type: "string" }
-          },
-          required: ["text"],
-        },
-      },
-      {
-        name: "scroll",
-        description: "Scrolls a widget.",
-        inputSchema: {
-          type: "object",
-          properties: {
-            target: { type: "string", description: "Target string (e.g. '#loginBtn', 'text=\"Submit\"', 'type=\"ElevatedButton\"', 'id=\"123\"')" },
-            dx: { type: "number", description: "Horizontal scroll delta" },
-            dy: { type: "number", description: "Vertical scroll delta" },
-            // Legacy
-            finderType: { type: "string" }, key: { type: "string" }
-          },
-          required: ["dx", "dy"],
-        },
-      },
-      {
-        name: "scroll_until_visible",
-        description: "Scrolls a scrollable widget until a target widget is visible.",
-        inputSchema: {
-          type: "object",
-          properties: {
-            target: { type: "string", description: "Target string (e.g. '#loginBtn', 'text=\"Submit\"', 'type=\"ElevatedButton\"', 'id=\"123\"')" },
-            dy: { type: "number", description: "Vertical scroll delta per step (default 50.0)" },
-            scrollable_target: { type: "string", description: "Optional target string for the scrollable container" },
-            // Legacy
-            finderType: { type: "string" }, key: { type: "string" }
-          },
-        },
-      },
-      {
-        name: "wait_for",
-        description: "Waits for a widget to appear.",
-        inputSchema: {
-          type: "object",
-          properties: {
-            target: { type: "string", description: "Target string (e.g. '#loginBtn', 'text=\"Submit\"', 'type=\"ElevatedButton\"', 'id=\"123\"')" },
-            timeout: { type: "number", description: "Timeout in milliseconds" },
-            // Legacy
-            finderType: { type: "string" }, key: { type: "string" }
-          },
-        },
-      },
-      {
-        name: "get_widget_tree",
-        description: "Returns a JSON representation of the widget tree.",
-        inputSchema: {
-          type: "object",
-          properties: {
-            summaryOnly: { type: "boolean", description: "If true, returns a filtered tree hiding layout clutter (Container, Padding, etc.)" }
-          },
-        },
-      },
-      {
-        name: "get_accessibility_tree",
-        description: "Returns the accessibility (semantics) tree.",
-        inputSchema: {
-          type: "object",
-          properties: {
-             includeRect: { type: "boolean", description: "If true, includes token-heavy coordinate and transform data for every node. Default is false." }
-          },
-        },
-      },
-      {
-        name: "explore_screen",
-        description: "Maps out interactive elements on the screen.",
-        inputSchema: {
-          type: "object",
-          properties: {},
-        },
-      },
-      {
-        name: "navigate_to",
-        description: "Pushes a named route using the root Navigator.",
-        inputSchema: {
-          type: "object",
-          properties: {
-             route: { type: "string", description: "Named route to navigate to (e.g. '/settings')" }
-          },
-          required: ["route"],
-        },
-      },
-      {
-        name: "intercept_network",
-        description: "Mocks a network response. Pass null for both to clear.",
-        inputSchema: {
-          type: "object",
-          properties: {
-             urlPattern: { type: "string" },
-             responseBody: { type: "string" }
-          },
-        },
-      },
-      {
-        name: "assert_exists",
-        description: "Returns { success: true } if the target exists.",
-        inputSchema: {
-          type: "object",
-          properties: {
-             target: { type: "string", description: "Target string (e.g. '#loginBtn', 'text=\"Submit\"', 'type=\"ElevatedButton\"', 'id=\"123\"')" }
-          },
-          required: ["target"],
-        },
-      },
-      {
-        name: "assert_not_exists",
-        description: "Returns { success: true } if the target does NOT exist.",
-        inputSchema: {
-          type: "object",
-          properties: {
-             target: { type: "string", description: "Target string (e.g. '#loginBtn', 'text=\"Submit\"', 'type=\"ElevatedButton\"', 'id=\"123\"')" }
-          },
-          required: ["target"],
-        },
-      },
-      {
-        name: "assert_text_equals",
-        description: "Returns { success: true } if the target text matches.",
-        inputSchema: {
-          type: "object",
-          properties: {
-             target: { type: "string", description: "Target string (e.g. '#loginBtn', 'text=\"Submit\"', 'type=\"ElevatedButton\"', 'id=\"123\"')" },
-             expectedText: { type: "string" }
-          },
-          required: ["target", "expectedText"],
-        },
-      },
-      {
-        name: "assert_state",
-        description: "Returns { success: true } if the target state (e.g. Checkbox value) matches.",
-        inputSchema: {
-          type: "object",
-          properties: {
-             target: { type: "string", description: "Target string (e.g. '#loginBtn', 'text=\"Submit\"', 'type=\"ElevatedButton\"', 'id=\"123\"')" },
-             stateKey: { type: "string", description: "e.g. 'value', 'groupValue'" },
-             expectedValue: { type: "boolean", description: "Expected bool value" } // Using generic for simplicity
-          },
-          required: ["target", "stateKey", "expectedValue"],
-        },
-      },
-      {
-        name: "take_screenshot",
-        description: "Captures a screenshot of the running app.",
-        inputSchema: {
-          type: "object",
-          properties: {
-            save_path: { type: "string", description: "Optional path to save the screenshot file (e.g. 'screenshot.png'). If not provided, returns base64." },
-            type: { 
-                type: "string", 
-                enum: ["device", "skia", "app"], 
-                default: "app",
-                description: "The type of screenshot to retrieve. 'app' (default): Renders the current Flutter frame to PNG (recommended for vision). 'device': Native device screenshot (might fail on desktop or capture home screen). 'skia': Skia picture (vector, not PNG, NOT for AI vision)." 
-            }
-          },
-        },
-      },
+    content: [
+      { type: "text", text: "Screenshot captured:" },
+      { type: "image", data: buffer.toString("base64"), mimeType: "image/png" },
     ],
   };
-});
+}
+
+// -- Environment --
+
+async function handleSimulateBackground(args: ToolArgs): Promise<ToolResponse> {
+  const durationMs = (args.duration_ms as number) ?? 2000;
+  const deviceId = session?.deviceId;
+
+  if (deviceId?.includes("-")) {
+    try {
+      await execa("xcrun", ["simctl", "launch", deviceId, "com.apple.springboard"]);
+      await new Promise((r) => setTimeout(r, durationMs));
+    } catch { /* ignore */ }
+    return textResponse(
+      "Simulated backgrounding via simctl (Note: resuming might require manual tap if bundle ID is unknown)"
+    );
+  }
+
+  if (deviceId?.startsWith("emulator-")) {
+    try {
+      await execa("adb", ["-s", deviceId, "shell", "input", "keyevent", "KEYCODE_HOME"]);
+      await new Promise((r) => setTimeout(r, durationMs));
+    } catch { /* ignore */ }
+    return textResponse("Simulated backgrounding via adb");
+  }
+
+  return textResponse("Device not supported for simulate_background");
+}
+
+async function handleSetNetworkStatus(args: ToolArgs): Promise<ToolResponse> {
+  const wifi = args.wifi as boolean;
+  const deviceId = session?.deviceId;
+
+  if (deviceId?.includes("-")) {
+    return textResponse(
+      "Network toggling in iOS simulators is complex and usually requires external proxies. " +
+      "Consider using 'intercept_network' instead."
+    );
+  }
+
+  if (deviceId?.startsWith("emulator-")) {
+    await execa("adb", ["-s", deviceId, "shell", "svc", "wifi", wifi ? "enable" : "disable"]);
+    return textResponse(`Set WiFi to ${wifi} via adb`);
+  }
+
+  return textResponse("Device not supported for set_network_status");
+}
+
+// -- Utilities --
+
+async function handleReadLogs(args: ToolArgs): Promise<ToolResponse> {
+  const count = (args.lines as number) ?? 50;
+  return textResponse(logBuffer.slice(-count).join(""));
+}
+
+async function handleValidateProject(args: ToolArgs): Promise<ToolResponse> {
+  const projectPath = args.project_path as string;
+  const autoFix = args.auto_fix as boolean | undefined;
+  const report: string[] = [];
+  let success = true;
+
+  // 1. Check pubspec.yaml
+  const pubspecPath = path.join(projectPath, "pubspec.yaml");
+  try {
+    const pubspec = await fs.readFile(pubspecPath, "utf-8");
+
+    for (const [dep, fixArgs] of [
+      ["integration_test", ["pub", "add", "integration_test", "--sdk=flutter"]],
+      ["web_socket_channel", ["pub", "add", "web_socket_channel"]],
+    ] as const) {
+      const found = pubspec.includes(`${dep}:`);
+      if (!found) {
+        report.push(`❌ Missing '${dep}' in pubspec.yaml.`);
+        success = false;
+        if (autoFix) {
+          await execa("flutter", [...fixArgs], { cwd: projectPath });
+          report.push(`✅ Added '${dep}'.`);
+        }
+      } else {
+        report.push(`✅ '${dep}' found.`);
+      }
+    }
+  } catch (e) {
+    report.push(`❌ Could not read pubspec.yaml: ${toErrorMessage(e)}`);
+    success = false;
+  }
+
+  // 2. Check macOS entitlements
+  const entitlementsPath = path.join(projectPath, "macos/Runner/DebugProfile.entitlements");
+  try {
+    await fs.access(entitlementsPath);
+    const content = await fs.readFile(entitlementsPath, "utf-8");
+
+    if (!content.includes("com.apple.security.network.client")) {
+      report.push("❌ Missing 'com.apple.security.network.client' in DebugProfile.entitlements.");
+      success = false;
+      if (autoFix) {
+        const idx = content.lastIndexOf("</dict>");
+        if (idx !== -1) {
+          const patched = content.slice(0, idx) +
+            "\t<key>com.apple.security.network.client</key>\n\t<true/>\n" +
+            content.slice(idx);
+          await fs.writeFile(entitlementsPath, patched);
+          report.push("✅ Added network client entitlement to DebugProfile.entitlements.");
+        } else {
+          report.push("⚠️ Could not auto-fix entitlements (structure mismatch).");
+        }
+      }
+    } else {
+      report.push("✅ macOS network client entitlement found.");
+    }
+  } catch {
+    // macOS folder doesn't exist — skip
+  }
+
+  // 3. Check Android permissions
+  const androidMain = path.join(projectPath, "android/app/src/main/AndroidManifest.xml");
+  const androidDebug = path.join(projectPath, "android/app/src/debug/AndroidManifest.xml");
+  try {
+    await fs.access(androidMain);
+    const mainManifest = await fs.readFile(androidMain, "utf-8");
+    let hasInternet = mainManifest.includes("android.permission.INTERNET");
+
+    if (!hasInternet) {
+      try {
+        const debugManifest = await fs.readFile(androidDebug, "utf-8");
+        hasInternet = debugManifest.includes("android.permission.INTERNET");
+      } catch { /* debug manifest may not exist */ }
+    }
+
+    if (!hasInternet) {
+      report.push("❌ Missing 'android.permission.INTERNET' in AndroidManifest.xml (main or debug).");
+      success = false;
+      if (autoFix) {
+        try {
+          let debugContent: string;
+          try {
+            debugContent = await fs.readFile(androidDebug, "utf-8");
+          } catch {
+            debugContent = '<manifest xmlns:android="http://schemas.android.com/apk/res/android" package="com.example.app">\n</manifest>';
+            await fs.mkdir(path.dirname(androidDebug), { recursive: true });
+          }
+
+          if (debugContent.includes("</manifest>")) {
+            const patched = debugContent.replace(
+              "</manifest>",
+              '    <uses-permission android:name="android.permission.INTERNET"/>\n</manifest>',
+            );
+            await fs.writeFile(androidDebug, patched);
+            report.push("✅ Added INTERNET permission to debug AndroidManifest.xml.");
+          } else {
+            report.push("⚠️ Could not auto-fix AndroidManifest.xml (structure mismatch).");
+          }
+        } catch (e) {
+          report.push(`⚠️ Failed to auto-fix Android permissions: ${toErrorMessage(e)}`);
+        }
+      }
+    } else {
+      report.push("✅ Android INTERNET permission found.");
+    }
+  } catch {
+    // Android folder doesn't exist — skip
+  }
+
+  // 4. Check web
+  try {
+    await fs.access(path.join(projectPath, "web/index.html"));
+    report.push("✅ Web index.html found.");
+  } catch {
+    // Not a web project — skip
+  }
+
+  // 5. Ensure harness is in .gitignore
+  const gitignorePath = path.join(projectPath, ".gitignore");
+  try {
+    await fs.access(gitignorePath);
+    const gitignore = await fs.readFile(gitignorePath, "utf-8");
+    if (!gitignore.includes("integration_test/mcp_harness.dart")) {
+      if (autoFix) {
+        await fs.appendFile(gitignorePath, "\n# Flutter Pilot MCP Harness\nintegration_test/mcp_harness.dart\n");
+        report.push("✅ Added 'integration_test/mcp_harness.dart' to .gitignore.");
+      } else {
+        report.push("❌ Missing 'integration_test/mcp_harness.dart' in .gitignore.");
+        success = false;
+      }
+    }
+  } catch {
+    // No .gitignore — skip
+  }
+
+  return {
+    content: [{ type: "text", text: report.join("\\n") }],
+    isError: !success && !autoFix,
+  };
+}
+
+// ─── Reusable Handler Patterns ──────────────────────────────────────────────
+
+/** Forward a command directly to the Dart harness, returning JSON. */
+function forwardToHarness(method: string, pretty = false): ToolHandler {
+  return async (args) => {
+    const payload = resolveTargetArgs(args);
+    const result = await sendRpc(method, payload);
+    return jsonResponse(result, pretty);
+  };
+}
+
+/** Forward with special handling for scroll_until_visible's nested scrollable target. */
+async function handleScrollUntilVisible(args: ToolArgs): Promise<ToolResponse> {
+  const payload = resolveTargetArgs(args);
+  if (typeof payload.scrollable_target === "string") {
+    payload.scrollable = parseTarget(payload.scrollable_target);
+    delete payload.scrollable_target;
+  }
+  const result = await sendRpc("scroll_until_visible", payload);
+  return jsonResponse(result);
+}
+
+// ─── Dispatch Map ───────────────────────────────────────────────────────────
+
+const handlers: Record<string, ToolHandler> = {
+  // Lifecycle
+  start_app:           handleStartApp,
+  stop_app:            handleStopApp,
+  pilot_hot_restart:   handlePilotHotRestart,
+  list_devices:        handleListDevices,
+
+  // Interaction
+  tap:                 forwardToHarness("tap"),
+  enter_text:          forwardToHarness("enter_text"),
+  scroll:              forwardToHarness("scroll"),
+  scroll_until_visible: handleScrollUntilVisible,
+  wait_for:            forwardToHarness("wait_for"),
+
+  // Inspection
+  get_widget_tree:     forwardToHarness("get_widget_tree", true),
+  get_accessibility_tree: forwardToHarness("get_accessibility_tree", true),
+  explore_screen:      forwardToHarness("explore_screen", true),
+  take_screenshot:     handleTakeScreenshot,
+
+  // Assertions
+  assert_exists:       forwardToHarness("assert_exists"),
+  assert_not_exists:   forwardToHarness("assert_not_exists"),
+  assert_text_equals:  forwardToHarness("assert_text_equals"),
+  assert_state:        forwardToHarness("assert_state"),
+
+  // Navigation & Environment
+  navigate_to:         forwardToHarness("navigate_to"),
+  intercept_network:   forwardToHarness("intercept_network"),
+  simulate_background: handleSimulateBackground,
+  set_network_status:  handleSetNetworkStatus,
+
+  // Utilities
+  read_logs:           handleReadLogs,
+  validate_project:    handleValidateProject,
+};
+
+// ─── MCP Server ─────────────────────────────────────────────────────────────
+
+const server = new Server(
+  { name: "flutter-test-pilot", version: "1.0.0" },
+  { capabilities: { tools: {} } },
+);
+
+server.setRequestHandler(ListToolsRequestSchema, async () => ({
+  tools: TOOL_DEFINITIONS,
+}));
 
 server.setRequestHandler(CallToolRequestSchema, async (request) => {
   const { name, arguments: args } = request.params;
+  const toolArgs = (args ?? {}) as ToolArgs;
 
   try {
-    if (name === "validate_project") {
-      const { project_path, auto_fix } = args as { project_path: string; auto_fix?: boolean };
-      const report: string[] = [];
-      let success = true;
-
-      // 1. Check pubspec.yaml
-      const pubspecPath = path.join(project_path, "pubspec.yaml");
-      try {
-        const pubspecContent = await fs.readFile(pubspecPath, "utf-8");
-        
-        const hasIntegrationTest = pubspecContent.includes("integration_test:");
-        const hasWebSocket = pubspecContent.includes("web_socket_channel:");
-        
-        if (!hasIntegrationTest) {
-            report.push("❌ Missing 'integration_test' in pubspec.yaml.");
-            success = false;
-            if (auto_fix) {
-                await execa("flutter", ["pub", "add", "integration_test", "--sdk=flutter"], { cwd: project_path });
-                report.push("✅ Added 'integration_test'.");
-            }
-        } else {
-            report.push("✅ 'integration_test' found.");
-        }
-
-        if (!hasWebSocket) {
-            report.push("❌ Missing 'web_socket_channel' in pubspec.yaml.");
-            success = false;
-            if (auto_fix) {
-                await execa("flutter", ["pub", "add", "web_socket_channel"], { cwd: project_path });
-                report.push("✅ Added 'web_socket_channel'.");
-            }
-        } else {
-            report.push("✅ 'web_socket_channel' found.");
-        }
-      } catch (e) {
-          report.push(`❌ Could not read pubspec.yaml: ${e}`);
-          success = false;
-      }
-
-      // 2. Check macOS entitlements (if macos folder exists)
-      const macosPath = path.join(project_path, "macos/Runner/DebugProfile.entitlements");
-      try {
-          await fs.access(macosPath); // Throws if not exists
-          
-          const entitlements = await fs.readFile(macosPath, "utf-8");
-          if (!entitlements.includes("com.apple.security.network.client")) {
-              report.push("❌ Missing 'com.apple.security.network.client' in DebugProfile.entitlements.");
-              success = false;
-              if (auto_fix) {
-                  const closingDictIndex = entitlements.lastIndexOf("</dict>");
-                  if (closingDictIndex !== -1) {
-                      const newContent = entitlements.slice(0, closingDictIndex) + 
-                                         "\t<key>com.apple.security.network.client</key>\n\t<true/>\n" + 
-                                         entitlements.slice(closingDictIndex);
-                      await fs.writeFile(macosPath, newContent);
-                      report.push("✅ Added network client entitlement to DebugProfile.entitlements.");
-                  } else {
-                      report.push("⚠️ Could not auto-fix entitlements (structure mismatch).");
-                  }
-              }
-          } else {
-              report.push("✅ macOS network client entitlement found.");
-          }
-      } catch (e) {
-          // Ignore if macos folder/file doesn't exist
-      }
-
-      // 3. Check Android permissions (if android folder exists)
-      const androidDebugManifestPath = path.join(project_path, "android/app/src/debug/AndroidManifest.xml");
-      const androidMainManifestPath = path.join(project_path, "android/app/src/main/AndroidManifest.xml");
-      try {
-          // Check if android folder exists by trying to access main manifest
-          await fs.access(androidMainManifestPath);
-
-          let hasInternet = false;
-          
-          // Check main manifest
-          const mainManifest = await fs.readFile(androidMainManifestPath, "utf-8");
-          if (mainManifest.includes("android.permission.INTERNET")) {
-              hasInternet = true;
-          }
-
-          // Check debug manifest if not found in main
-          if (!hasInternet) {
-              try {
-                  const debugManifest = await fs.readFile(androidDebugManifestPath, "utf-8");
-                  if (debugManifest.includes("android.permission.INTERNET")) {
-                      hasInternet = true;
-                  }
-              } catch (e) {
-                  // Debug manifest might not exist
-              }
-          }
-
-          if (!hasInternet) {
-              report.push("❌ Missing 'android.permission.INTERNET' in AndroidManifest.xml (main or debug).");
-              success = false;
-              if (auto_fix) {
-                  // Try to add to debug manifest
-                  try {
-                      let debugManifest = "";
-                      try {
-                          debugManifest = await fs.readFile(androidDebugManifestPath, "utf-8");
-                      } catch (e) {
-                          // Create if doesn't exist (basic template)
-                          debugManifest = '<manifest xmlns:android="http://schemas.android.com/apk/res/android" package="com.example.app">\n</manifest>';
-                          const debugDir = path.dirname(androidDebugManifestPath);
-                          await fs.mkdir(debugDir, { recursive: true });
-                      }
-
-                      if (debugManifest.includes("</manifest>")) {
-                          const newContent = debugManifest.replace(
-                              "</manifest>",
-                              '    <uses-permission android:name="android.permission.INTERNET"/>\n</manifest>'
-                          );
-                          await fs.writeFile(androidDebugManifestPath, newContent);
-                          report.push("✅ Added INTERNET permission to debug AndroidManifest.xml.");
-                      } else {
-                          report.push("⚠️ Could not auto-fix AndroidManifest.xml (structure mismatch).");
-                      }
-                  } catch (e) {
-                      report.push(`⚠️ Failed to auto-fix Android permissions: ${e}`);
-                  }
-              }
-          } else {
-              report.push("✅ Android INTERNET permission found.");
-          }
-      } catch (e) {
-          // Ignore if android folder doesn't exist
-      }
-
-      // 4. Check Web (if web folder exists)
-      const webIndexPath = path.join(project_path, "web/index.html");
-      try {
-          await fs.access(webIndexPath);
-          report.push("✅ Web index.html found.");
-      } catch (e) {
-          // Ignore if web folder doesn't exist or isn't a web project
-      }
-
-      // 5. Add harness to .gitignore
-      const gitignorePath = path.join(project_path, ".gitignore");
-      try {
-          await fs.access(gitignorePath);
-          const gitignoreContent = await fs.readFile(gitignorePath, "utf-8");
-          if (!gitignoreContent.includes("integration_test/mcp_harness.dart")) {
-             if (auto_fix) {
-                 await fs.appendFile(gitignorePath, "\n# Flutter Pilot MCP Harness\nintegration_test/mcp_harness.dart\n");
-                 report.push("✅ Added 'integration_test/mcp_harness.dart' to .gitignore.");
-             } else {
-                 report.push("❌ Missing 'integration_test/mcp_harness.dart' in .gitignore.");
-                 success = false;
-             }
-          }
-      } catch(e) {
-         // ignore if no gitignore
-      }
-
-      return {
-          content: [{ type: "text", text: report.join("\\n") }],
-          isError: !success && !auto_fix 
-      };
-    }
-
-    if (name === "start_app") {
-      const { project_path, device_id } = args as { project_path: string; device_id?: string };
-      
-      // Reset state
-      currentObservatoryUri = null;
-      currentProjectPath = project_path;
-      currentDeviceId = device_id || null;
-      logBuffer.length = 0; // Clear logs
-
-      // 1. Start WS Server
-      const port = await startWsServer();
-      
-      // 2. Inject Harness
-      const integrationTestDir = path.join(project_path, "integration_test");
-      await fs.mkdir(integrationTestDir, { recursive: true });
-      
-      // Try to determine package name from pubspec.yaml
-      const packageName = await getPackageName(project_path);
-      const harnessCode = getHarnessCode(packageName);
-      
-      const harnessPath = path.join(integrationTestDir, "mcp_harness.dart");
-      await fs.writeFile(harnessPath, harnessCode);
-      
-      // 3. Spawn Flutter Process
-      const flutterArgs = [
-        "run", // Use 'run' instead of 'test' to get observatory URI and support hot restart
-        "--machine",
-        "--target", "integration_test/mcp_harness.dart",
-        "--dart-define", `WS_URL=ws://localhost:${port}`
-      ];
-      
-      if (device_id) {
-        flutterArgs.push("-d", device_id);
-      }
-      
-      console.error(`Spawning: flutter ${flutterArgs.join(" ")}`);
-      
-      if (activeProcess) {
-        activeProcess.kill();
-      }
-      
-      activeProcess = execa("flutter", flutterArgs, {
-        cwd: project_path,
-        stdio: ["pipe", "pipe", "pipe"], // pipe stdout/stderr to log
-      });
-      activeProcess.catch((e: any) => {}); // Prevent unhandled rejection
-      
-      // Stream logs and parse for Observatory URI
-      activeProcess.stdout?.on("data", (chunk: any) => {
-          const str = chunk.toString();
-          console.error(`[Flutter]: ${str}`);
-          addToLogBuffer(str);
-          
-          // Parse JSON events from flutter run --machine
-          const lines = str.split("\n");
-          for (const line of lines) {
-              const trimmed = line.trim();
-              if (trimmed.startsWith("[") || trimmed.startsWith("{")) {
-                  try {
-                      let events = JSON.parse(line);
-                      if (!Array.isArray(events)) {
-                          events = [events];
-                      }
-                      
-                      for (const event of events) {
-                          if (event.event === "app.debugPort") {
-                             if (event.params && event.params.wsUri) {
-                                 currentObservatoryUri = event.params.wsUri;
-                                 console.error(`Captured Observatory URI: ${currentObservatoryUri}`);
-                             }
-                          }
-                          if (event.event === "app.started") {
-                              if (event.params && event.params.appId) {
-                                  currentAppId = event.params.appId;
-                                  console.error(`Captured App ID: ${currentAppId}`);
-                              }
-                          }
-                      }
-                  } catch (e) {
-                      // ignore parse errors for non-json lines
-                  }
-              }
-          }
-      });
-      activeProcess.stderr?.on("data", (chunk: any) => {
-        const str = chunk.toString();
-        console.error(`[Flutter Err]: ${str}`);
-        addToLogBuffer(str);
-      });
-
-      activeProcess.on("exit", (code: any) => {
-        console.error(`Flutter process exited with code ${code}`);
-        activeProcess = null;
-        activeWs = null;
-        currentObservatoryUri = null;
-      });
-
-      // 4. Wait for connection
-      console.error("Waiting for app to connect...");
-      await new Promise<void>((resolve, reject) => {
-        appStartedResolver = resolve;
-        setTimeout(() => reject(new Error("Timeout waiting for app to start")), 180000); // 180s timeout for build/launch
-      });
-      
-      return {
-        content: [{ type: "text", text: `App started and connected! (Injected harness with package: ${packageName ?? 'unknown'})` }],
-      };
-    }
-
-    if (name === "stop_app") {
-      // 1. Gracefully stop via flutter run --machine protocol
-      if (activeProcess && currentAppId) {
-        try {
-          const stopCmd = JSON.stringify([{
-            "method": "app.stop",
-            "params": { "appId": currentAppId },
-            "id": nextMsgId++
-          }]) + "\n";
-          activeProcess.stdin.write(stopCmd);
-          console.error("Sent app.stop command to Flutter daemon.");
-
-          // Wait briefly for graceful shutdown
-          await new Promise<void>((resolve) => {
-            const timeout = setTimeout(() => resolve(), 5000);
-            activeProcess?.on("exit", () => {
-              clearTimeout(timeout);
-              resolve();
-            });
-          });
-        } catch (e) {
-          console.error("Error sending app.stop:", e);
-        }
-      }
-
-      // 2. Force kill the flutter process if still alive
-      if (activeProcess) {
-        try {
-          activeProcess.kill("SIGKILL");
-        } catch (e) {
-          // ignore - process may already be dead
-        }
-        activeProcess = null;
-      }
-
-      // 3. Close WebSocket
-      activeWs?.close();
-      
-      // 4. Kill any orphaned test app processes on macOS/Linux
-      //    The macOS app binary is typically named after the project (e.g. "test_app")
-      if (currentProjectPath) {
-        const projectName = path.basename(currentProjectPath);
-        try {
-          await execa("pkill", ["-f", `${projectName}.*flutter`], { reject: false });
-        } catch (e) {
-          // ignore
-        }
-        // Also try to kill any Flutter-launched macOS .app process
-        try {
-          await execa("pkill", ["-f", `${projectName}.app`], { reject: false });
-        } catch (e) {
-          // ignore
-        }
-      }
-
-      currentObservatoryUri = null;
-      currentAppId = null;
-      currentProjectPath = null;
-      
-      // Clean up screenshots
-      const tempDir = path.join(os.tmpdir(), "flutter_pilot_screenshots");
-      try {
-          await fs.rm(tempDir, { recursive: true, force: true });
-      } catch (e) {
-          // ignore
-      }
-
-      return { content: [{ type: "text", text: "App stopped." }] };
-    }
-
-    if (name === "pilot_hot_restart") {
-        if (!activeProcess) {
-            throw new Error("App is not running. Use start_app first.");
-        }
-        if (!currentAppId) {
-            throw new Error("App ID not available. Cannot restart.");
-        }
-        
-        // Send JSON-RPC restart command to flutter run stdin
-        // Flutter run --machine expects [ { "method": "app.restart", "params": { "appId": "...", "fullRestart": true }, "id": <id> } ]
-        const restartCmd = JSON.stringify([{ 
-            "method": "app.restart", 
-            "params": { 
-                "appId": currentAppId,
-                "fullRestart": true 
-            }, 
-            "id": nextMsgId++ 
-        }]) + "\n";
-        activeProcess.stdin.write(restartCmd);
-        
-        console.error("Sent hot restart command.");
-        return { content: [{ type: "text", text: "Hot restart command sent." }] };
-    }
-
-    if (name === "read_logs") {
-        const { lines = 50 } = args as { lines?: number };
-        const logs = logBuffer.slice(-lines);
-        return { content: [{ type: "text", text: logs.join("") }] };
-    }
-
-    if (name === "take_screenshot") {
-        const { save_path, type = "app" } = args as { save_path?: string, type?: string };
-        
-        if (!activeProcess) {
-            throw new Error("App is not running. Use start_app first.");
-        }
-
-        if (type === "app") {
-             const result = await sendRpc("screenshot", {}) as { data: string, format: string, error?: string };
-             if (result.error) throw new Error(result.error);
-             
-             const base64 = result.data;
-             const buffer = Buffer.from(base64, 'base64');
-             
-             if (save_path) {
-                 await fs.writeFile(save_path, buffer);
-                 return { content: [{ type: "text", text: `Screenshot saved to ${save_path}` }] };
-             } else {
-                 return { 
-                    content: [
-                        { type: "text", text: "Screenshot captured:" },
-                        { type: "image", data: base64, mimeType: "image/png" }
-                    ] 
-                };
-             }
-        }
-
-        if (!currentObservatoryUri) {
-            throw new Error("Observatory URI not available. Screenshot requires a debug/profile build with VM service enabled.");
-        }
-
-        const tempDir = path.join(os.tmpdir(), "flutter_pilot_screenshots");
-        await fs.mkdir(tempDir, { recursive: true });
-        const tempPath = path.join(tempDir, `screenshot_${Date.now()}.png`);
-
-        const screenshotArgs = ["screenshot", `--type=${type}`, "-o", tempPath];
-        if (type !== "device") {
-            screenshotArgs.push("--vm-service-url=" + currentObservatoryUri);
-        }
-        
-        if (currentDeviceId) {
-            screenshotArgs.push("-d", currentDeviceId);
-        }
-
-        console.error(`Taking screenshot via: flutter ${screenshotArgs.join(" ")}`);
-        
-        try {
-            try {
-                await execa("flutter", screenshotArgs, {
-                    cwd: currentProjectPath || undefined
-                });
-            } catch (flutterErr: any) {
-                if (currentDeviceId === "macos" && type === "device") {
-                    console.error("Flutter screenshot failed, falling back to macOS screencapture...");
-                    await execa("screencapture", ["-x", tempPath]);
-                } else {
-                    throw flutterErr;
-                }
-            }
-
-            // Check if file exists
-            await fs.access(tempPath);
-
-            if (save_path) {
-                // Move/copy to requested path
-                await fs.copyFile(tempPath, save_path);
-                return { content: [{ type: "text", text: `Screenshot saved to ${save_path}` }] };
-            } else {
-                // Return base64
-                const buffer = await fs.readFile(tempPath);
-                const base64 = buffer.toString("base64");
-                // Cleanup temp file immediately if not saving
-                await fs.unlink(tempPath);
-                return { 
-                    content: [
-                        { type: "text", text: "Screenshot captured:" },
-                        { type: "image", data: base64, mimeType: "image/png" }
-                    ] 
-                };
-            }
-        } catch (e: any) {
-            throw new Error(`Failed to take screenshot: ${e.message} \nStderr: ${e.stderr}`);
-        }
-    }
-
-    if (name === "tap") {
-      const payload = args as any;
-      if (payload.target) {
-          Object.assign(payload, parseTarget(payload.target));
-          delete payload.target;
-      }
-      const result = await sendRpc("tap", payload);
-      return { content: [{ type: "text", text: JSON.stringify(result) }] };
-    }
-
-    if (name === "enter_text") {
-        const payload = args as any;
-        if (payload.target) {
-            Object.assign(payload, parseTarget(payload.target));
-            delete payload.target;
-        }
-        const result = await sendRpc("enter_text", payload);
-        return { content: [{ type: "text", text: JSON.stringify(result) }] };
-    }
-    
-    if (name === "scroll") {
-        const payload = args as any;
-        if (payload.target) {
-            Object.assign(payload, parseTarget(payload.target));
-            delete payload.target;
-        }
-        const result = await sendRpc("scroll", payload);
-        return { content: [{ type: "text", text: JSON.stringify(result) }] };
-    }
-
-    if (name === "scroll_until_visible") {
-        const payload = args as any;
-        if (payload.target) {
-            Object.assign(payload, parseTarget(payload.target));
-            delete payload.target;
-        }
-        if (payload.scrollable_target) {
-            payload.scrollable = parseTarget(payload.scrollable_target);
-            delete payload.scrollable_target;
-        }
-        const result = await sendRpc("scroll_until_visible", payload);
-        return { content: [{ type: "text", text: JSON.stringify(result) }] };
-    }
-
-    if (name === "wait_for") {
-        const payload = args as any;
-        if (payload.target) {
-            Object.assign(payload, parseTarget(payload.target));
-            delete payload.target;
-        }
-        const result = await sendRpc("wait_for", payload);
-        return { content: [{ type: "text", text: JSON.stringify(result) }] };
-    }
-    
-    if (name === "get_widget_tree") {
-        const result = await sendRpc("get_widget_tree", args);
-        return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
-    }
-
-    if (name === "get_accessibility_tree") {
-        const result = await sendRpc("get_accessibility_tree", args);
-        return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
-    }
-
-    if (name === "explore_screen") {
-        const result = await sendRpc("explore_screen", args);
-        return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
-    }
-
-    if (name === "navigate_to") {
-        const result = await sendRpc("navigate_to", args);
-        return { content: [{ type: "text", text: JSON.stringify(result) }] };
-    }
-
-    if (name === "intercept_network") {
-        const result = await sendRpc("intercept_network", args);
-        return { content: [{ type: "text", text: JSON.stringify(result) }] };
-    }
-
-    if (name.startsWith("assert_")) {
-        const payload = args as any;
-        if (payload.target) {
-            Object.assign(payload, parseTarget(payload.target));
-            delete payload.target;
-        }
-        const result = await sendRpc(name, payload);
-        return { content: [{ type: "text", text: JSON.stringify(result) }] };
-    }
-
-    if (name === "simulate_background") {
-        const { duration_ms = 2000 } = args as { duration_ms?: number };
-        // If it's an iOS simulator, we can use xcrun simctl
-        if (currentDeviceId && currentDeviceId.includes('-')) {
-             try {
-                // Background
-                await execa("xcrun", ["simctl", "launch", currentDeviceId, "com.apple.springboard"]);
-                await new Promise(r => setTimeout(r, duration_ms));
-                // Resuming requires knowing the bundle ID, which we could extract from the project,
-                // but for now, this is a basic stub
-             } catch(e) { }
-             return { content: [{ type: "text", text: "Simulated backgrounding via simctl (Note: resuming might require manual tap if bundle ID is unknown)" }] };
-        } else if (currentDeviceId && currentDeviceId.startsWith("emulator-")) {
-             try {
-                // Press Home button
-                await execa("adb", ["-s", currentDeviceId, "shell", "input", "keyevent", "KEYCODE_HOME"]);
-                await new Promise(r => setTimeout(r, duration_ms));
-                // Resume might require waking up depending on adb
-             } catch(e) { }
-             return { content: [{ type: "text", text: "Simulated backgrounding via adb" }] };
-        }
-        return { content: [{ type: "text", text: "Device not supported for simulate_background" }] };
-    }
-
-    if (name === "set_network_status") {
-        const { wifi } = args as { wifi: boolean };
-        if (currentDeviceId && currentDeviceId.includes('-')) {
-             return { content: [{ type: "text", text: "Network toggling in iOS simulators is complex and usually requires external proxies. Consider using 'intercept_network' instead." }] };
-        } else if (currentDeviceId && currentDeviceId.startsWith("emulator-")) {
-             try {
-                await execa("adb", ["-s", currentDeviceId, "shell", "svc", "wifi", wifi ? "enable" : "disable"]);
-                return { content: [{ type: "text", text: `Set WiFi to ${wifi} via adb` }] };
-             } catch(e) { }
-        }
-        return { content: [{ type: "text", text: "Device not supported for set_network_status" }] };
-    }
-
-    throw new Error(`Unknown tool: ${name}`);
-  } catch (error: any) {
+    const handler = handlers[name];
+    if (!handler) throw new Error(`Unknown tool: ${name}`);
+    return await handler(toolArgs);
+  } catch (error) {
     return {
-      content: [{ type: "text", text: `Error: ${error.message}` }],
+      content: [{ type: "text", text: `Error: ${toErrorMessage(error)}` }],
       isError: true,
     };
   }
 });
 
+// ─── Bootstrap ──────────────────────────────────────────────────────────────
+
 const transport = new StdioServerTransport();
-async function main() {
-    await server.connect(transport);
+
+async function main(): Promise<void> {
+  await server.connect(transport);
 }
 
 main().catch(console.error);
