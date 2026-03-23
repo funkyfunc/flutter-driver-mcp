@@ -664,20 +664,20 @@ Map<String, dynamic> _handleInterceptNetwork(Map<String, dynamic> params) {
 
 Future<Map<String, dynamic>> _handleExploreScreen(WidgetTester tester) async {
   // Ensure semantics are enabled
-  final semanticsHandle = SemanticsBinding.instance.ensureSemantics();
+  final semanticsHandle = tester.binding.ensureSemantics();
   
-  await tester.pumpAndSettle();
-  
-  final semanticsOwner = RendererBinding.instance.rootPipelineOwner.semanticsOwner;
-  if (semanticsOwner == null) {
-    semanticsHandle.dispose();
-    return {'error': 'SemanticsOwner is null'};
+  // Wait for the semantics tree to be generated
+  SemanticsNode? root;
+  for (int i = 0; i < 5; i++) {
+    await tester.pump(const Duration(milliseconds: 100));
+    // ignore: deprecated_member_use
+    root = tester.binding.pipelineOwner.semanticsOwner?.rootSemanticsNode;
+    if (root != null) break;
   }
   
-  final root = semanticsOwner.rootSemanticsNode;
   if (root == null) {
     semanticsHandle.dispose();
-    return {'error': 'No root semantics node'};
+    return {'error': 'No root semantics node after 5 pumps'};
   }
   
   final interactiveNodes = <Map<String, dynamic>>[];
@@ -741,21 +741,20 @@ void _collectInteractiveSemantics(SemanticsNode node, List<Map<String, dynamic>>
 
 Future<Map<String, dynamic>> _handleGetAccessibilityTree(WidgetTester tester, Map<String, dynamic> params) async {
   // Ensure semantics are enabled
-  final semanticsHandle = SemanticsBinding.instance.ensureSemantics();
+  final semanticsHandle = tester.binding.ensureSemantics();
   
   // Wait for the semantics tree to be generated
-  await tester.pumpAndSettle();
-  
-  final semanticsOwner = RendererBinding.instance.rootPipelineOwner.semanticsOwner;
-  if (semanticsOwner == null) {
-    semanticsHandle.dispose(); // Dispose on error
-    return {'error': 'SemanticsOwner is null'};
+  SemanticsNode? root;
+  for (int i = 0; i < 5; i++) {
+    await tester.pump(const Duration(milliseconds: 100));
+    // ignore: deprecated_member_use
+    root = tester.binding.pipelineOwner.semanticsOwner?.rootSemanticsNode;
+    if (root != null) break;
   }
   
-  final root = semanticsOwner.rootSemanticsNode;
   if (root == null) {
     semanticsHandle.dispose(); // Dispose on error
-    return {'error': 'No root semantics node'};
+    return {'error': 'No root semantics node after 5 pumps'};
   }
   
   final includeRect = params['includeRect'] == true;

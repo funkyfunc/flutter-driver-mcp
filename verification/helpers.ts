@@ -31,8 +31,8 @@ export interface McpTool {
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
-export const SERVER_JS = path.join(__dirname, "../src/index.js");
-export const TEST_APP_PATH = path.join(__dirname, "../../test_app");
+export const SERVER_JS = path.join(__dirname, "../dist/index.js");
+export const TEST_APP_PATH = path.join(__dirname, "../test_app");
 
 export function spawnServer(
 	stderr: "inherit" | "pipe" | typeof process.stderr = "inherit",
