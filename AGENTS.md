@@ -49,6 +49,12 @@ To add a new capability (e.g., `long_press`), follow this strict checklist:
 
 ## 🧠 Codebase Conventions
 
+### 1. Optimize for Cognitive Load (Intent-Based Naming)
+Rename variables, functions, and classes to explicitly describe their business intent and real-world behavior, not their data types. Eliminate vague names like `data`, `temp`, `helper`, or `processStuff`. When reading the code, you should know exactly what problem it solves without reading the implementation.
+
+### 2. Flatten the Logic (Aggressive Early Returns)
+Refactor control flow to minimize cyclomatic complexity. Eliminate deep nesting (the "arrow anti-pattern") by using early returns and guard clauses at the top of functions. The "happy path" of the function should always be at the outermost level.
+
 ### Unified Selectors
 Instead of forcing the LLM to write verbose JSON like `{ "finderType": "byKey", "key": "myButton" }`, most tools accept a single `target` string.
 - `target: "#myButton"` → `find.byKey(Key('myButton'))`

@@ -9,7 +9,13 @@ import 'package:web_socket_channel/io.dart';
 import 'package:flutter/rendering.dart';
 import 'package:flutter/foundation.dart';
 
+
 // INJECT_IMPORT
+
+// --- Tuning Constants ---
+const kPumpSettlingInterval = Duration(milliseconds: 100);
+const kDefaultWaitTimeout = Duration(milliseconds: 5000);
+const kMaxWebSocketRetries = 5;
 
 // --- Global Network Interceptor ---
 class _McpHttpOverrides extends HttpOverrides {
@@ -91,7 +97,7 @@ class _MockHttpClientRequest implements HttpClientRequest {
   @override bool bufferOutput = true;
   @override int contentLength = -1;
   @override bool followRedirects = true;
-  @override int maxRedirects = 5;
+  @override int maxRedirects = kMaxWebSocketRetries;
   @override bool persistentConnection = true;
   @override HttpHeaders get headers => _MockHttpHeaders();
   @override HttpConnectionInfo? get connectionInfo => null;
@@ -191,9 +197,10 @@ void main() {
     final wsUrl = const String.fromEnvironment('WS_URL', defaultValue: 'ws://localhost:8080');
     debugPrint('MCP: Connecting to $wsUrl');
     
-    // Simple retry logic
+    // The Node.js server starts the WebSocket server asynchronously in parallel with launching Flutter.
+    // We retry connection 5 times to ensure we do not fail if the Flutter app boots faster than the Node WS server binds to the port.
     IOWebSocketChannel? channel;
-    for (var i = 0; i < 5; i++) {
+    for (var i = 0; i < kMaxWebSocketRetries; i++) {
       try {
         channel = IOWebSocketChannel.connect(Uri.parse(wsUrl));
         await channel.ready;
@@ -302,77 +309,50 @@ void main() {
   });
 }
 
-_FinderResult _createFinder(Map<String, dynamic> params) {
+String _buildSuggestiveErrorMessage(String finderType, Map<String, dynamic> params) {
+  final allElements = find.byType(Widget).evaluate().toList();
+  final suggestions = <String>[];
+  
+  if (finderType == 'byText' && params['text'] != null) {
+    final target = params['text'].toString().toLowerCase();
+    final textWidgets = allElements.where((e) => e.widget is Text).take(100);
+    for (final e in textWidgets) {
+      final w = e.widget as Text;
+      if (w.data != null && w.data!.toLowerCase().contains(target)) {
+        suggestions.add('Did you mean text: "${w.data}"?');
+      }
+    }
+  } else if (finderType == 'byKey' && params['key'] != null) {
+    final target = params['key'].toString();
+    final keyWidgets = allElements.where((e) => e.widget.key != null).take(100);
+    for (final e in keyWidgets) {
+      final keyStr = e.widget.key.toString();
+      if (keyStr.contains(target) || target.contains(keyStr.replaceAll(RegExp(r"[\['<>\]]"), ''))) {
+        suggestions.add('Did you mean key: $keyStr (Type: ${e.widget.runtimeType})?');
+      }
+    }
+  }
+
+  final suggestionText = suggestions.isNotEmpty 
+    ? '\nSuggestions:\n - ${suggestions.take(3).join('\n - ')}' 
+    : '';
+
+  return 'WidgetNotFoundException: No widget found with type "$finderType" and params "$params"$suggestionText';
+}
+
+_FinderResult _resolveWidgetFinder(Map<String, dynamic> params) {
   final finderType = params['finderType'] as String?;
   if (finderType == null) throw 'finderType is required';
 
-  Finder finder;
-  switch (finderType.toLowerCase()) {
-    case 'bykey':
-      finder = find.byKey(Key(params['key'] as String));
-      break;
-    case 'byvaluekey':
-      final keyVal = params['key'];
-      if (keyVal is int) {
-         finder = find.byKey(ValueKey<int>(keyVal));
-      } else {
-        finder = find.byKey(ValueKey<String>(keyVal.toString()));
-      }
-      break;
-    case 'bytext':
-      finder = find.text(params['text'] as String);
-      break;
-    case 'bytooltip':
-      finder = find.byTooltip(params['tooltip'] as String);
-      break;
-    case 'bytype':
-      finder = find.byWidgetPredicate((widget) => widget.runtimeType.toString() == params['type']);
-      break;
-    case 'byid':
-      final idString = params['id'].toString();
-      final id = int.tryParse(idString);
-      finder = find.byElementPredicate((Element element) {
-         return element.renderObject?.debugSemantics?.id == id;
-      });
-      break;
-    default:
-      throw 'Unsupported finder type: $finderType';
-  }
-
+  final finder = _resolveLazyWidgetFinder(params);
   final elements = finder.evaluate().toList();
+  
   if (elements.isEmpty) {
-    // Attempt fuzzy matching for suggestive errors
-    final allElements = find.byType(Widget).evaluate().toList();
-    final suggestions = <String>[];
-    
-    // Simple checks for common mistakes
-    if (finderType == 'byText' && params['text'] != null) {
-      final target = params['text'].toString().toLowerCase();
-      final textWidgets = allElements.where((e) => e.widget is Text).take(100);
-      for (final e in textWidgets) {
-        final w = e.widget as Text;
-        if (w.data != null && w.data!.toLowerCase().contains(target)) {
-          suggestions.add('Did you mean text: "${w.data}"?');
-        }
-      }
-    } else if (finderType == 'byKey' && params['key'] != null) {
-      final target = params['key'].toString();
-      final keyWidgets = allElements.where((e) => e.widget.key != null).take(100);
-      for (final e in keyWidgets) {
-        final keyStr = e.widget.key.toString();
-        if (keyStr.contains(target) || target.contains(keyStr.replaceAll(RegExp(r"[\['<>\]]"), ''))) {
-          suggestions.add('Did you mean key: $keyStr (Type: ${e.widget.runtimeType})?');
-        }
-      }
-    }
-
-    String suggestionText = suggestions.isNotEmpty 
-      ? '\nSuggestions:\n - ${suggestions.take(3).join('\n - ')}' 
-      : '';
-
-    throw 'WidgetNotFoundException: No widget found with type "$finderType" and params "$params"$suggestionText';
-  } else if (elements.length > 1) {
-    int? index = params['index'] as int?;
+    throw _buildSuggestiveErrorMessage(finderType, params);
+  } 
+  
+  if (elements.length > 1) {
+    final index = params['index'] as int?;
     if (index != null && index >= 0 && index < elements.length) {
        return _FinderResult(finder.at(index), [elements[index]]);
     }
@@ -384,6 +364,7 @@ _FinderResult _createFinder(Map<String, dynamic> params) {
       matches,
     );
   }
+  
   return _FinderResult(finder, elements);
 }
 
@@ -393,7 +374,7 @@ _FinderResult _createFinder(Map<String, dynamic> params) {
 // If it's lazy loaded (e.g. ListView.builder), it MIGHT NOT BE IN THE TREE yet.
 // In that case, flutter_test's scrollUntilVisible iterates until it finds it.
 // So we MUST NOT evaluate/throw if empty for scrollUntilVisible target.
-Finder _createLazyFinder(Map<String, dynamic> params) {
+Finder _resolveLazyWidgetFinder(Map<String, dynamic> params) {
   final finderType = params['finderType'] as String?;
   if (finderType == null) throw 'finderType is required';
 
@@ -433,7 +414,7 @@ Finder _createLazyFinder(Map<String, dynamic> params) {
 }
 
 Future<void> _handleTap(WidgetTester tester, Map<String, dynamic> params) async {
-  final result = _createFinder(params);
+  final result = _resolveWidgetFinder(params);
   try {
     await tester.ensureVisible(result.finder);
     await tester.pumpAndSettle();
@@ -445,7 +426,7 @@ Future<void> _handleTap(WidgetTester tester, Map<String, dynamic> params) async 
 }
 
 Future<void> _handleEnterText(WidgetTester tester, Map<String, dynamic> params) async {
-  final result = _createFinder(params);
+  final result = _resolveWidgetFinder(params);
   final text = params['text'] as String;
   await tester.enterText(result.finder, text);
   await tester.pumpAndSettle();
@@ -474,7 +455,7 @@ Future<void> _handleEnterText(WidgetTester tester, Map<String, dynamic> params) 
 }
 
 Future<void> _handleScroll(WidgetTester tester, Map<String, dynamic> params) async {
-  final result = _createFinder(params);
+  final result = _resolveWidgetFinder(params);
   final dx = (params['dx'] as num?)?.toDouble() ?? 0.0;
   final dy = (params['dy'] as num?)?.toDouble() ?? 0.0;
   await tester.drag(result.finder, Offset(dx, dy));
@@ -482,15 +463,15 @@ Future<void> _handleScroll(WidgetTester tester, Map<String, dynamic> params) asy
 }
 
 Future<void> _handleScrollUntilVisible(WidgetTester tester, Map<String, dynamic> params) async {
-  // Use _createLazyFinder so we don't throw if it's not currently in the tree (lazy list)
-  final targetFinder = _createLazyFinder(params);
+  // Use _resolveLazyWidgetFinder so we don't throw if it's not currently in the tree (lazy list)
+  final targetFinder = _resolveLazyWidgetFinder(params);
   
   // Handle optional scrollable finder
   Finder? scrollableFinder;
   if (params['scrollable'] != null) {
     // For the scrollable itself, it MUST exist.
     final scrollableParams = params['scrollable'] as Map<String, dynamic>;
-    final scrollableResult = _createFinder(scrollableParams);
+    final scrollableResult = _resolveWidgetFinder(scrollableParams);
     scrollableFinder = scrollableResult.finder;
   }
   // If null, flutter_test will find the first ancestor scrollable.
@@ -527,19 +508,19 @@ Future<void> _handleScrollUntilVisible(WidgetTester tester, Map<String, dynamic>
 
 Future<void> _handleWaitFor(WidgetTester tester, Map<String, dynamic> params) async {
   // waitFor implies it might not be there yet.
-  final finder = _createLazyFinder(params);
-  final timeout = Duration(milliseconds: params['timeout'] as int? ?? 5000);
+  final finder = _resolveLazyWidgetFinder(params);
+  final timeout = Duration(milliseconds: params['timeout'] as int? ?? kDefaultWaitTimeout.inMilliseconds);
   final end = DateTime.now().add(timeout);
   while (DateTime.now().isBefore(end)) {
     if (finder.evaluate().isNotEmpty) return;
-    await tester.pump(const Duration(milliseconds: 100));
+    await tester.pump(kPumpSettlingInterval);
   }
   throw 'Timeout waiting for widget';
 }
 
 Future<Map<String, dynamic>> _handleAssertExists(WidgetTester tester, Map<String, dynamic> params) async {
   try {
-    _createFinder(params);
+    _resolveWidgetFinder(params);
     return {'success': true};
   } catch (e) {
     return {'success': false, 'error': e.toString()};
@@ -547,7 +528,7 @@ Future<Map<String, dynamic>> _handleAssertExists(WidgetTester tester, Map<String
 }
 
 Future<Map<String, dynamic>> _handleAssertNotExists(WidgetTester tester, Map<String, dynamic> params) async {
-  final finder = _createLazyFinder(params);
+  final finder = _resolveLazyWidgetFinder(params);
   final exists = finder.evaluate().isNotEmpty;
   if (exists) {
     return {'success': false, 'error': 'Widget exists but was expected not to.'};
@@ -559,7 +540,7 @@ Future<Map<String, dynamic>> _handleAssertTextEquals(WidgetTester tester, Map<St
   final expectedText = params['expectedText'] as String?;
   if (expectedText == null) throw 'expectedText is required';
   
-  final result = _createFinder(params);
+  final result = _resolveWidgetFinder(params);
   final element = result.elements.first;
   final widget = element.widget;
   
@@ -595,7 +576,7 @@ Future<Map<String, dynamic>> _handleAssertState(WidgetTester tester, Map<String,
   final expectedValue = params['expectedValue'];
   if (stateKey == null || expectedValue == null) throw 'stateKey and expectedValue are required';
 
-  final result = _createFinder(params);
+  final result = _resolveWidgetFinder(params);
   final widget = result.elements.first.widget;
   
   Object? actualValue;
@@ -668,8 +649,8 @@ Future<Map<String, dynamic>> _handleExploreScreen(WidgetTester tester) async {
   
   // Wait for the semantics tree to be generated
   SemanticsNode? root;
-  for (int i = 0; i < 5; i++) {
-    await tester.pump(const Duration(milliseconds: 100));
+  for (int i = 0; i < kMaxWebSocketRetries; i++) {
+    await tester.pump(kPumpSettlingInterval);
     // ignore: deprecated_member_use
     root = tester.binding.pipelineOwner.semanticsOwner?.rootSemanticsNode;
     if (root != null) break;
@@ -693,18 +674,18 @@ Future<Map<String, dynamic>> _handleExploreScreen(WidgetTester tester) async {
 
 void _collectInteractiveSemantics(SemanticsNode node, List<Map<String, dynamic>> collection) {
   final data = node.getSemanticsData();
-  final fc = data.flagsCollection;
+  final flagsCollection = data.flagsCollection;
   
-  final isInteractive = fc.isButton || 
-                        fc.isTextField ||
-                        fc.isLink ||
+  final isInteractive = flagsCollection.isButton || 
+                        flagsCollection.isTextField ||
+                        flagsCollection.isLink ||
                         data.hasAction(SemanticsAction.tap) ||
                         data.hasAction(SemanticsAction.longPress) ||
                         data.hasAction(SemanticsAction.setText) ||
-                        fc.isChecked != ui.CheckedState.none ||
-                        fc.isSlider;
+                        flagsCollection.isChecked != ui.CheckedState.none ||
+                        flagsCollection.isSlider;
   
-  if (isInteractive && !fc.isHidden) {
+  if (isInteractive && !flagsCollection.isHidden) {
       final json = <String, dynamic>{
         'id': node.id,
       };
@@ -714,12 +695,12 @@ void _collectInteractiveSemantics(SemanticsNode node, List<Map<String, dynamic>>
       if (data.hint.isNotEmpty) json['hint'] = data.hint;
       
       final flags = <String>[];
-      if (fc.isButton) flags.add('isButton');
-      if (fc.isTextField) flags.add('isTextField');
-      if (fc.isChecked != ui.CheckedState.none) flags.add('hasCheckedState');
-      if (fc.isChecked == ui.CheckedState.isTrue) flags.add('isChecked');
-      if (fc.isSelected == ui.Tristate.isTrue) flags.add('isSelected');
-      if (fc.isSlider) flags.add('isSlider');
+      if (flagsCollection.isButton) flags.add('isButton');
+      if (flagsCollection.isTextField) flags.add('isTextField');
+      if (flagsCollection.isChecked != ui.CheckedState.none) flags.add('hasCheckedState');
+      if (flagsCollection.isChecked == ui.CheckedState.isTrue) flags.add('isChecked');
+      if (flagsCollection.isSelected == ui.Tristate.isTrue) flags.add('isSelected');
+      if (flagsCollection.isSlider) flags.add('isSlider');
       if (flags.isNotEmpty) json['flags'] = flags;
 
       final actions = <String>[];
@@ -745,8 +726,8 @@ Future<Map<String, dynamic>> _handleGetAccessibilityTree(WidgetTester tester, Ma
   
   // Wait for the semantics tree to be generated
   SemanticsNode? root;
-  for (int i = 0; i < 5; i++) {
-    await tester.pump(const Duration(milliseconds: 100));
+  for (int i = 0; i < kMaxWebSocketRetries; i++) {
+    await tester.pump(kPumpSettlingInterval);
     // ignore: deprecated_member_use
     root = tester.binding.pipelineOwner.semanticsOwner?.rootSemanticsNode;
     if (root != null) break;
@@ -793,27 +774,27 @@ Map<String, dynamic> _serializeSemanticsNode(SemanticsNode node, {required bool 
 
   // Flags
   final flags = <String>[];
-  final fc = data.flagsCollection;
-  if (fc.isChecked != ui.CheckedState.none) flags.add('hasCheckedState');
-  if (fc.isChecked == ui.CheckedState.isTrue) flags.add('isChecked');
-  if (fc.isSelected == ui.Tristate.isTrue) flags.add('isSelected');
-  if (fc.isButton) flags.add('isButton');
-  if (fc.isTextField) flags.add('isTextField');
-  if (fc.isReadOnly) flags.add('isReadOnly');
-  if (fc.isLink) flags.add('isLink');
-  if (fc.isHeader) flags.add('isHeader');
-  if (fc.isSlider) flags.add('isSlider');
-  if (fc.isLiveRegion) flags.add('isLiveRegion');
-  if (fc.isHidden) flags.add('isHidden');
-  if (fc.isImage) flags.add('isImage');
-  if (fc.isInMutuallyExclusiveGroup) flags.add('isInMutuallyExclusiveGroup');
-  if (fc.scopesRoute) flags.add('scopesRoute');
-  if (fc.namesRoute) flags.add('namesRoute');
-  if (fc.isObscured) flags.add('isObscured');
-  if (fc.isMultiline) flags.add('isMultiline');
-  if (fc.isFocused != ui.Tristate.none) flags.add('isFocusable');
-  if (fc.isFocused == ui.Tristate.isTrue) flags.add('isFocused');
-  if (fc.isEnabled == ui.Tristate.isTrue) flags.add('isEnabled');
+  final flagsCollection = data.flagsCollection;
+  if (flagsCollection.isChecked != ui.CheckedState.none) flags.add('hasCheckedState');
+  if (flagsCollection.isChecked == ui.CheckedState.isTrue) flags.add('isChecked');
+  if (flagsCollection.isSelected == ui.Tristate.isTrue) flags.add('isSelected');
+  if (flagsCollection.isButton) flags.add('isButton');
+  if (flagsCollection.isTextField) flags.add('isTextField');
+  if (flagsCollection.isReadOnly) flags.add('isReadOnly');
+  if (flagsCollection.isLink) flags.add('isLink');
+  if (flagsCollection.isHeader) flags.add('isHeader');
+  if (flagsCollection.isSlider) flags.add('isSlider');
+  if (flagsCollection.isLiveRegion) flags.add('isLiveRegion');
+  if (flagsCollection.isHidden) flags.add('isHidden');
+  if (flagsCollection.isImage) flags.add('isImage');
+  if (flagsCollection.isInMutuallyExclusiveGroup) flags.add('isInMutuallyExclusiveGroup');
+  if (flagsCollection.scopesRoute) flags.add('scopesRoute');
+  if (flagsCollection.namesRoute) flags.add('namesRoute');
+  if (flagsCollection.isObscured) flags.add('isObscured');
+  if (flagsCollection.isMultiline) flags.add('isMultiline');
+  if (flagsCollection.isFocused != ui.Tristate.none) flags.add('isFocusable');
+  if (flagsCollection.isFocused == ui.Tristate.isTrue) flags.add('isFocused');
+  if (flagsCollection.isEnabled == ui.Tristate.isTrue) flags.add('isEnabled');
   
   if (flags.isNotEmpty) json['flags'] = flags;
 
@@ -868,12 +849,41 @@ Map<String, dynamic> _handleGetWidgetTree(WidgetTester tester, Map<String, dynam
   return _serializeElement(root, summaryOnly: summaryOnly, screenSize: screenSize, inOverlay: false);
 }
 
+void _extractWidgetProperties(Widget widget, Map<String, dynamic> json) {
+  if (widget.key != null) { json['key'] = widget.key.toString(); }
+
+  if (widget is Text) { json['data'] = widget.data; }
+  else if (widget is Tooltip) { json['message'] = widget.message; }
+  else if (widget is EditableText) { json['value'] = widget.controller.text; }
+  else if (widget is Icon) { json['icon'] = widget.icon.toString(); }
+  else if (widget is Image) { json['image'] = widget.image.toString(); } 
+  else if (widget is GestureDetector) { json['onTap'] = widget.onTap != null; }
+  else if (widget is InkWell) { json['onTap'] = widget.onTap != null; }
+  else if (widget is ElevatedButton) { json['onPressed'] = widget.onPressed != null; }
+  else if (widget is TextButton) { json['onPressed'] = widget.onPressed != null; }
+  else if (widget is FloatingActionButton) { json['onPressed'] = widget.onPressed != null; }
+}
+
+void _detectViewportVisibility(RenderObject renderObject, Size screenSize, Map<String, dynamic> json) {
+  if (!renderObject.attached) return;
+  try {
+    final transform = renderObject.getTransformTo(null);
+    final paintBounds = MatrixUtils.transformRect(transform, renderObject.paintBounds);
+    final screenRect = Offset.zero & screenSize;
+    if (paintBounds.width > 0 && paintBounds.height > 0) {
+      json['isInViewport'] = screenRect.overlaps(paintBounds);
+    }
+  } catch (_) {
+    // Ignore transform errors
+  }
+}
+
 Map<String, dynamic> _serializeElement(Element element, {required bool summaryOnly, required Size screenSize, required bool inOverlay}) {
   final widget = element.widget;
   final type = widget.runtimeType.toString().replaceAll(RegExp(r'<[^>]*>'), '');
   
-  bool isOverlayType = type == 'Overlay' || type == '_OverlayEntryWidget' || type == 'Dialog' || type == 'BottomSheet' || type == 'PopupMenuButton';
-  bool currentlyInOverlay = inOverlay || isOverlayType;
+  final isOverlayType = type == 'Overlay' || type == '_OverlayEntryWidget' || type == 'Dialog' || type == 'BottomSheet' || type == 'PopupMenuButton';
+  final currentlyInOverlay = inOverlay || isOverlayType;
 
   final children = <Map<String, dynamic>>[];
   
@@ -886,55 +896,15 @@ Map<String, dynamic> _serializeElement(Element element, {required bool summaryOn
     }
   });
 
-  final json = <String, dynamic>{
-    'type': type,
-  };
+  final json = <String, dynamic>{'type': type};
+  if (currentlyInOverlay) json['isOverlay'] = true;
 
-  if (currentlyInOverlay) {
-    json['isOverlay'] = true;
-  }
-
-  // Viewport detection
-  final ro = element.renderObject;
-  if (ro != null && ro.attached) {
-    try {
-      final transform = ro.getTransformTo(null);
-      final paintBounds = MatrixUtils.transformRect(transform, ro.paintBounds);
-      final screenRect = Offset.zero & screenSize;
-      // We only flag it if it has positive paint bounds intersecting the screen
-      if (paintBounds.width > 0 && paintBounds.height > 0) {
-        json['isInViewport'] = screenRect.overlaps(paintBounds);
-      }
-    } catch (_) {
-      // Ignore transform errors
-    }
+  if (element.renderObject != null) {
+    _detectViewportVisibility(element.renderObject!, screenSize, json);
   }
 
-  if (widget.key != null) {
-    json['key'] = widget.key.toString();
-  }
-  if (widget is Text) {
-    json['data'] = widget.data;
-  } else if (widget is Tooltip) {
-    json['message'] = widget.message;
-  } else if (widget is EditableText) {
-    json['value'] = widget.controller.text;
-  } else if (widget is Icon) {
-    json['icon'] = widget.icon.toString();
-  } else if (widget is Image) {
-    json['image'] = widget.image.toString(); 
-  } else if (widget is GestureDetector) {
-    json['onTap'] = widget.onTap != null;
-  } else if (widget is InkWell) {
-    json['onTap'] = widget.onTap != null;
-  } else if (widget is ElevatedButton) {
-    json['onPressed'] = widget.onPressed != null;
-  } else if (widget is TextButton) {
-    json['onPressed'] = widget.onPressed != null;
-  } else if (widget is FloatingActionButton) {
-    json['onPressed'] = widget.onPressed != null;
-  }
-  
+  _extractWidgetProperties(widget, json);
+
   if (children.isNotEmpty) {
     json['children'] = children;
   }

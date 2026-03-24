@@ -86,7 +86,9 @@ async function runTests(): Promise<void> {
 
 		// ── Accessibility ──────────────────────────────────────────────────────
 		step("get_accessibility_tree");
-		const a11yResult = await callTool(client, "get_accessibility_tree", { includeRect: true });
+		const a11yResult = await callTool(client, "get_accessibility_tree", {
+			includeRect: true,
+		});
 		const a11yTree = JSON.parse(extractText(a11yResult)) as {
 			id?: unknown;
 			rect?: unknown;
