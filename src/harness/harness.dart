@@ -442,6 +442,10 @@ Finder _resolveLazyWidgetFinder(Map<String, dynamic> params) {
          return element.renderObject?.debugSemantics?.id == id;
       });
       break;
+    case 'bysemanticslabel':
+      final label = params['semanticsLabel'] as String;
+      finder = find.bySemanticsLabel(RegExp(RegExp.escape(label)));
+      break;
     default:
       throw 'Unsupported finder type: $finderType';
   }
@@ -793,6 +797,20 @@ Future<Map<String, dynamic>> _handleExploreScreen(WidgetTester tester) async {
   };
 }
 
+String _buildSuggestedTarget(SemanticsNode node, SemanticsData data) {
+  final flagsCollection = data.flagsCollection;
+  // Prefer tooltip (guaranteed to work with byTooltip finder)
+  if (data.tooltip.isNotEmpty) return 'tooltip="${data.tooltip}"';
+  // For text fields, use semanticsLabel (the label/hint text)
+  if (flagsCollection.isTextField && data.label.isNotEmpty) {
+    return 'semanticsLabel="${data.label}"';
+  }
+  // For buttons/links with a label, use semanticsLabel
+  if (data.label.isNotEmpty) return 'semanticsLabel="${data.label}"';
+  // Fallback: use the stable semantics node ID
+  return 'id="${node.id}"';
+}
+
 void _collectInteractiveSemantics(SemanticsNode node, List<Map<String, dynamic>> collection) {
   final data = node.getSemanticsData();
   final flagsCollection = data.flagsCollection;
@@ -809,6 +827,7 @@ void _collectInteractiveSemantics(SemanticsNode node, List<Map<String, dynamic>>
   if (isInteractive && !flagsCollection.isHidden) {
       final json = <String, dynamic>{
         'id': node.id,
+        'suggestedTarget': _buildSuggestedTarget(node, data),
       };
       if (data.label.isNotEmpty) json['label'] = data.label;
       if (data.value.isNotEmpty) json['value'] = data.value;
@@ -1155,6 +1174,14 @@ Future<Map<String, dynamic>> _handleGoBack(WidgetTester tester) async {
   final navigatorState = (navigatorElement as StatefulElement).state as NavigatorState;
 
   if (!navigatorState.canPop()) {
+    // Check for modal overlays (bottom sheets, dialogs) that aren't Navigator routes
+    final barrierFinder = find.byWidgetPredicate((widget) => widget.runtimeType.toString() == 'ModalBarrier');
+    if (barrierFinder.evaluate().length > 1) {
+      // More than 1 ModalBarrier means an overlay is active (root always has one)
+      await tester.sendKeyEvent(LogicalKeyboardKey.escape);
+      await tester.pumpAndSettle();
+      return {'success': true, 'dismissed': 'overlay'};
+    }
     return {'success': false, 'error': 'Cannot pop — already at root route.'};
   }
 

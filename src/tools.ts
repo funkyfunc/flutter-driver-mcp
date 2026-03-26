@@ -49,15 +49,10 @@ async function forwardToHarness(
 // ─── Shared Schema Fragments ────────────────────────────────────────────────
 
 const TARGET_DESCRIPTION =
-	"Target string (e.g. '#loginBtn', 'text=\"Submit\"', 'type=\"ElevatedButton\"', 'id=\"123\"')";
+	"Target string (e.g. '#loginBtn', 'text=\"Submit\"', 'type=\"ElevatedButton\"', 'semanticsLabel=\"Username\"')";
 
 const targetShape = {
 	target: z.string().describe(TARGET_DESCRIPTION).optional(),
-	finderType: z.string().optional(),
-	key: z.string().optional(),
-	text: z.string().optional(),
-	tooltip: z.string().optional(),
-	type: z.string().optional(),
 };
 
 // ─── Tool Registration ──────────────────────────────────────────────────────

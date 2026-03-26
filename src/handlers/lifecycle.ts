@@ -46,7 +46,7 @@ export async function handleStartApp(args: {
 	});
 
 	attachDaemonStreams(flutterProcess);
-	await waitForAppConnection();
+	await waitForAppConnection(flutterProcess);
 
 	return textResponse(
 		`App started and connected! (Injected harness with package: ${packageName ?? "unknown"})`,

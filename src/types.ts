@@ -16,7 +16,8 @@ export type FinderPayload =
 	| { finderType: "byText"; text: string }
 	| { finderType: "byType"; type: string }
 	| { finderType: "byTooltip"; tooltip: string }
-	| { finderType: "byId"; id: string };
+	| { finderType: "byId"; id: string }
+	| { finderType: "bySemanticsLabel"; semanticsLabel: string };
 
 // ─── JSON-RPC Protocol ──────────────────────────────────────────────────────
 

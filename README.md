@@ -35,10 +35,11 @@ Flutter Driver MCP bridges your LLM (Claude, Gemini, etc.) to a running Flutter 
 All interaction tools accept a simple `target` string instead of verbose JSON:
 
 ```
-"#my_key"          →  find by Key
-"text=\"Submit\""    →  find by text
-"type=\"Checkbox\""  →  find by widget type
-"tooltip=\"Back\""   →  find by tooltip
+"#my_key"                    →  find by Key
+"text=\"Submit\""              →  find by text
+"type=\"Checkbox\""            →  find by widget type
+"tooltip=\"Back\""             →  find by tooltip
+"semanticsLabel=\"Username\""  →  find by semantics label (hint text, accessibility label)
 ```
 
 ### Suggestive Errors
@@ -130,7 +131,7 @@ Once your MCP client is connected, ask the agent to:
 
 | Tool | Description |
 |---|---|
-| `start_app` | Injects the harness, launches the app via `flutter run`, and connects over WebSocket. |
+| `start_app` | Injects the harness, launches the app via `flutter run`, and connects over WebSocket. Surfaces actual build errors (compiler messages, Xcode failures) instead of generic timeouts. |
 | `stop_app` | Gracefully sends `app.stop` to the Flutter daemon, kills processes, and cleans up. |
 | `pilot_hot_restart` | Sends a full restart command to the running app (preserves session). |
 | `list_devices` | Lists available Flutter devices (simulators, emulators, physical, desktop). No running app required. |
@@ -142,7 +143,7 @@ Once your MCP client is connected, ask the agent to:
 | `tap` | Taps a widget. Automatically scrolls it into view first. |
 | `long_press` | Long presses on a widget (triggers `onLongPress` callbacks). |
 | `double_tap` | Double taps on a widget (triggers `onDoubleTap` callbacks). |
-| `enter_text` | Enters text into a `TextField`. Optionally sends a `TextInputAction` (e.g. `done`, `search`). |
+| `enter_text` | Enters text into a `TextField`. Supports finding fields by hint text via `semanticsLabel="Hint"`. Optionally sends a `TextInputAction` (e.g. `done`, `search`). |
 | `scroll` | Drags a widget by `(dx, dy)`. |
 | `swipe` | Swipes a widget in a named direction (`up`, `down`, `left`, `right`) with configurable distance. |
 | `drag_and_drop` | Drags from a source widget to a destination widget or custom pixel offset. |
@@ -157,7 +158,7 @@ Once your MCP client is connected, ask the agent to:
 |---|---|
 | `get_widget_tree` | Returns the full widget tree as JSON. Use `summaryOnly: true` to filter layout noise. |
 | `get_accessibility_tree` | Returns the Semantics tree — compact, labels-focused, ideal for LLMs. Pass `includeRect: true` if coordinates are needed. |
-| `explore_screen` | Maps all interactive elements on the current screen using the native Semantics tree. |
+| `explore_screen` | Maps all interactive elements on the current screen using the native Semantics tree. Each element includes a `suggestedTarget` — a copy-pasteable selector string guaranteed to work with interaction tools. |
 | `get_text` | Returns the raw text string from a widget (supports `Text`, `EditableText`, and `RichText` descendants). |
 | `take_screenshot` | Captures a PNG screenshot. Defaults to `type: "app"` (recommended) for maximum reliability; `"device"` uses native capture. |
 | `screenshot_element` | Captures a PNG screenshot of a specific widget by target. Useful for visual regression of individual components. |
@@ -176,7 +177,7 @@ Once your MCP client is connected, ask the agent to:
 | Tool | Description |
 |---|---|
 | `navigate_to` | Pushes a named route via `Navigator.pushNamed`. |
-| `go_back` | Pops the current route off the Navigator stack (like pressing the back button). |
+| `go_back` | Pops the current route or dismisses modal overlays (bottom sheets, dialogs). Falls back to Escape key for overlays that aren't Navigator routes. |
 | `get_current_route` | Returns the name of the currently active route — lets the agent know where it is. |
 | `simulate_background` | Sends the app to background and brings it back after a duration. |
 | `set_network_status` | Toggles WiFi on/off (macOS/iOS Simulator only). |

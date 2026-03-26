@@ -6,6 +6,7 @@ import { getHarnessCode } from "../harness/harness.js";
 import {
 	activeAppSession,
 	appendLog,
+	recentDaemonLogs,
 	setActiveAppSession,
 	setAppConnectedResolver,
 } from "../session.js";
@@ -126,13 +127,24 @@ export function attachDaemonStreams(flutterProcess: Subprocess): void {
 	});
 }
 
-export async function waitForAppConnection(): Promise<void> {
+export async function waitForAppConnection(
+	flutterProcess: Subprocess,
+): Promise<void> {
 	console.error("Waiting for app to connect...");
 	return new Promise<void>((resolve, reject) => {
 		setAppConnectedResolver(resolve);
-		setTimeout(
+
+		const timeout = setTimeout(
 			() => reject(new Error("Timeout waiting for app to start")),
 			APP_LAUNCH_TIMEOUT_MS,
 		);
+
+		flutterProcess.on("exit", (code: number | null) => {
+			if (code !== null && code !== 0) {
+				clearTimeout(timeout);
+				const recentOutput = recentDaemonLogs.slice(-20).join("\n");
+				reject(new Error(`Build failed (exit code ${code}):\n${recentOutput}`));
+			}
+		});
 	});
 }
