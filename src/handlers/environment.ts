@@ -36,7 +36,9 @@ export async function handleSimulateBackground(args: { duration_ms?: number }) {
 		return textResponse("Simulated backgrounding via adb");
 	}
 
-	return textResponse("Device not supported for simulate_background");
+	throw new Error(
+		"Device not supported for simulate_background. Only iOS simulators and Android emulators are supported.",
+	);
 }
 
 export async function handleSetNetworkStatus(args: { wifi: boolean }) {
@@ -62,5 +64,7 @@ export async function handleSetNetworkStatus(args: { wifi: boolean }) {
 		return textResponse(`Set WiFi to ${wifi} via adb`);
 	}
 
-	return textResponse("Device not supported for set_network_status");
+	throw new Error(
+		"Device not supported for set_network_status. Only iOS simulators and Android emulators are supported.",
+	);
 }

@@ -282,7 +282,7 @@ void main() {
     // The Node.js server starts the WebSocket server asynchronously in parallel with launching Flutter.
     // We retry connection 5 times to ensure we do not fail if the Flutter app boots faster than the Node WS server binds to the port.
     IOWebSocketChannel? channel;
-    for (var i = 0; i < kMaxWebSocketRetries; i++) {
+    for (int i = 0; i < kMaxWebSocketRetries; i++) {
       try {
         channel = IOWebSocketChannel.connect(Uri.parse(wsUrl));
         await channel.ready;
@@ -500,6 +500,12 @@ _FinderResult _resolveWidgetFinder(Map<String, dynamic> params) {
   } 
   
   if (elements.length > 1) {
+    // For semantics labels, implicitly select the deepest match (the last element)
+    // because semantics labels propagate upward from child to parent widgets.
+    if (finderType.toLowerCase() == 'bysemanticslabel') {
+        return _FinderResult(finder.last, [elements.last]);
+    }
+
     final index = params['index'] as int?;
     if (index != null && index >= 0 && index < elements.length) {
        return _FinderResult(finder.at(index), [elements[index]]);
@@ -558,15 +564,15 @@ Finder _resolveLazyWidgetFinder(Map<String, dynamic> params) {
     case 'bysemanticslabel':
       final label = params['semanticsLabel'] as String;
       final labelLower = label.toLowerCase();
-      // Use .last to get the deepest match — semantics labels propagate upward
-      // from child widgets, so the last match is the actual input field, not its parent.
+      // We don't use .last here anymore to avoid `Bad state: No element` exceptions when the tree is evaluated empty.
+      // Instead, we extract .last in `_resolveWidgetFinder`, safely checking if elements.isEmpty first.
       finder = find.byElementPredicate((Element element) {
         final semantics = element.renderObject?.debugSemantics;
         if (semantics == null) return false;
         final data = semantics.getSemanticsData();
         return data.label.toLowerCase().contains(labelLower) ||
                data.hint.toLowerCase().contains(labelLower);
-      }).last;
+      });
       break;
     default:
       throw 'Unsupported finder type: $finderType';
@@ -888,6 +894,9 @@ Future<Map<String, dynamic>> _handleNavigateTo(WidgetTester tester, Map<String, 
     
     return {'success': true};
   } catch (e) {
+    if (e.toString().contains('onGenerateRoute was null')) {
+       throw 'navigate_to failed: App uses a custom router like GoRouter. Please use the tap() tool to navigate on-screen elements instead.';
+    }
     return {'success': false, 'error': e.toString()};
   }
 }
@@ -1014,10 +1023,16 @@ Future<Map<String, dynamic>> _handleBatchActions(
         default:
           throw 'Unsupported batch action: $tool';
       }
+      
+      if (result is Map<String, dynamic> && result['success'] == false) {
+          results.add({'tool': tool, 'status': 'error', 'error': result['error']});
+          return {'results': results, 'all_succeeded': false, 'failed_at_index': i};
+      }
+      
       results.add({'tool': tool, 'status': 'success', if (result != null) 'result': result});
     } catch (e) {
       results.add({'tool': tool, 'status': 'error', 'error': e.toString()});
-      return {'results': results, 'failed_at_index': i};
+      return {'results': results, 'all_succeeded': false, 'failed_at_index': i};
     }
   }
 
@@ -1031,7 +1046,7 @@ Future<void> _handleWaitForAnimation(WidgetTester tester, Map<String, dynamic> p
   final frameInterval = const Duration(milliseconds: 16); // ~60fps
   final totalDuration = Duration(milliseconds: durationMs);
   
-  var elapsed = Duration.zero;
+  Duration elapsed = Duration.zero;
   while (elapsed < totalDuration) {
     await tester.pump(frameInterval);
     elapsed += frameInterval;
@@ -1434,6 +1449,21 @@ Future<Map<String, dynamic>> _handleGoBack(WidgetTester tester) async {
 // ─── Get Current Route ───────────────────────────────────────────────────────
 
 Map<String, dynamic> _handleGetCurrentRoute(WidgetTester tester) {
+  // First, check if the app uses the Router API (e.g. GoRouter >= v8)
+  final routerFinder = find.byWidgetPredicate((w) => w.runtimeType.toString().startsWith('Router<') || w.runtimeType.toString() == 'Router');
+  if (routerFinder.evaluate().isNotEmpty) {
+      try {
+          final routerElement = routerFinder.evaluate().first;
+          final router = routerElement.widget as dynamic;
+          final uri = router.routerDelegate.currentConfiguration?.uri?.toString();
+          if (uri != null && uri.isNotEmpty) {
+              return {'route': uri};
+          }
+      } catch (_) {
+          // Fall back to Navigator if GoRouter extraction fails
+      }
+  }
+
   String? currentRouteName;
 
   final navigatorFinder = find.byType(Navigator);

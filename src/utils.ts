@@ -13,7 +13,8 @@ export function parseTarget(target: string): FinderPayload {
 		const value = trimmedTarget
 			.substring(eqIndex + 1)
 			.trim()
-			.replace(/^['"`]|['"`]$/g, "");
+			.replace(/^['"`]|['"`]$/g, "")
+			.replace(/\\n/g, "\n");
 
 		switch (prefix) {
 			case "text":
@@ -32,7 +33,7 @@ export function parseTarget(target: string): FinderPayload {
 	// Fallback to text matching
 	return {
 		finderType: "byText",
-		text: trimmedTarget.replace(/^['"`]|['"`]$/g, ""),
+		text: trimmedTarget.replace(/^['"`]|['"`]$/g, "").replace(/\\n/g, "\n"),
 	};
 }
 
