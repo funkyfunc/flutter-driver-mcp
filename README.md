@@ -89,7 +89,7 @@ npm install -g flutter-driver-mcp
 
 Use `npx -y flutter-driver-mcp` to run the server.
 
-Add the following to your MCP client configuration (e.g., `claude_desktop_config.json` or `.gemini/settings.json`):
+Add the following to your MCP client configuration:
 ```json
 {
   "mcpServers": {
