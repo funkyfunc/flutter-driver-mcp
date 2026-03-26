@@ -651,6 +651,12 @@ Future<void> _handleTap(WidgetTester tester, Map<String, dynamic> params) async 
 
 Future<void> _handleEnterText(WidgetTester tester, Map<String, dynamic> params) async {
   final result = await _resolveWidgetFinderWithWait(tester, params);
+  
+  final isEditable = find.descendant(of: result.finder, matching: find.byType(EditableText), matchRoot: true);
+  if (isEditable.evaluate().isEmpty) {
+     throw StateError('Target does not accept text input. Ensure the widget is a TextField or EditableText.');
+  }
+
   final text = params['text'] as String;
   await tester.enterText(result.finder, text);
   await tester.pumpAndSettle();
@@ -774,6 +780,29 @@ Future<void> _handleDragAndDrop(WidgetTester tester, Map<String, dynamic> params
 
 Future<void> _handleScroll(WidgetTester tester, Map<String, dynamic> params) async {
   final result = await _resolveWidgetFinderWithWait(tester, params);
+
+  bool isScrollable = false;
+  for (final element in result.elements) {
+    if (element.widget is Scrollable) {
+       isScrollable = true; break;
+    }
+    bool foundScrollableAncestor = false;
+    element.visitAncestorElements((ancestor) {
+       if (ancestor.widget is Scrollable) {
+          foundScrollableAncestor = true;
+          return false;
+       }
+       return true;
+    });
+    if (foundScrollableAncestor) {
+       isScrollable = true; break;
+    }
+  }
+
+  if (!isScrollable) {
+     throw StateError('Target widget is not scrollable and is not inside a scrollable container.');
+  }
+
   final dx = (params['dx'] as num?)?.toDouble() ?? 0.0;
   final dy = (params['dy'] as num?)?.toDouble() ?? 0.0;
   await tester.drag(result.finder, Offset(dx, dy));
@@ -1077,6 +1106,27 @@ Future<Map<String, dynamic>> _handleBatchActions(
           break;
         case 'press_key':
           await _handlePressKey(tester, args);
+          break;
+        case 'explore_screen':
+          result = await _handleExploreScreen(tester, args);
+          break;
+        case 'screenshot':
+          result = await _handleScreenshot(tester);
+          break;
+        case 'screenshot_element':
+          result = await _handleScreenshotElement(tester, args);
+          break;
+        case 'get_widget_tree':
+          result = _handleGetWidgetTree(tester, args);
+          break;
+        case 'get_accessibility_tree':
+          result = await _handleGetAccessibilityTree(tester, args);
+          break;
+        case 'get_text':
+          result = await _handleGetText(tester, args);
+          break;
+        case 'get_current_route':
+          result = _handleGetCurrentRoute(tester);
           break;
         default:
           throw 'Unsupported batch action: $tool';

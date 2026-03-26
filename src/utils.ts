@@ -37,7 +37,11 @@ export function parseTarget(target: string): FinderPayload {
 			case "tooltip":
 				return { finderType: "byTooltip", tooltip: value };
 			case "id":
-				return { finderType: "byId", id: value };
+				if (/^\d+$/.test(value)) {
+					return { finderType: "byId", id: value };
+				} else {
+					return { finderType: "byKey", key: value };
+				}
 			case "semanticsLabel":
 				return { finderType: "bySemanticsLabel", semanticsLabel: value };
 		}
