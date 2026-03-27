@@ -17,7 +17,7 @@ The system is fundamentally composed of two halves communicating over a local We
 
 2. **The Dart Harness (`src/harness.dart` & `src/harness.ts`)**
    - A generic `integration_test` script injected into the target Flutter application.
-   - Listens to the WebSocket and translates JSON-RPC commands into Flutter `WidgetTester` operations (`tap`, `scroll`, `find.byKey`, `assert_exists`, etc.).
+   - Listens to the WebSocket and translates JSON-RPC commands into Flutter `WidgetTester` operations (`tap`, `scroll`, `find.byKey`, `assert`, etc.).
 
 ### The Injection Mechanism (`start_app`)
 When the `start_app` tool is invoked, the following magic happens to seamlessly control the app:
@@ -69,7 +69,7 @@ To minimize LLM latency and context usage, several optimizations are baked into 
 - **Type Stripping**: The `get_widget_tree` tool automatically strips Dart generic parameters (e.g., `Provider<User>` becomes `Provider`) using regex.
 - **Optional Coordinates**: `get_accessibility_tree` defaults to omitting token-heavy `rect` and `transform` data. Use `includeRect: true` only if relative screen positions are explicitly needed.
 - **Network Interception**: The `intercept_network` tool uses a lightweight `HttpClient` proxy (`_McpHttpClient`) in the harness to mock `dart:io` requests without needing external mocking libraries.
-- **Robust Screenshots**: The `take_screenshot` tool defaults to `type: "app"`. This is the most reliable method for AI agents as it captures the Flutter frame directly from memory, bypassing OS-level permission issues that often plague native `"device"` screenshots. On macOS, a native fallback is provided if `"device"` mode is explicitly requested and fails.
+- **Robust Screenshots**: The `screenshot` tool defaults to `type: "app"`. This is the most reliable method for AI agents as it captures the Flutter frame directly from memory, bypassing OS-level permission issues that often plague native `"device"` screenshots. On macOS, a native fallback is provided if `"device"` mode is explicitly requested and fails.
 
 ## 🧪 Local Testing & Verification
 

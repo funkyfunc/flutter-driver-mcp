@@ -1,4 +1,3 @@
-import fs from "node:fs/promises";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import {
@@ -11,15 +10,13 @@ import {
 	handleStartApp,
 	handleStopApp,
 } from "./handlers/lifecycle.js";
-import { handleTakeScreenshot } from "./handlers/screenshot.js";
+import { handleScreenshot } from "./handlers/screenshot.js";
 import { handleValidateProject } from "./handlers/validation.js";
 import { sendRpc } from "./infra/rpc.js";
 import { recentDaemonLogs } from "./session.js";
-import type { ScreenshotResult } from "./types.js";
+import { jsonResponse, parseTarget, textResponse } from "./utils.js";
 
 // ─── Selector Parsing ───────────────────────────────────────────────────────
-
-import { jsonResponse, parseTarget, textResponse } from "./utils.js";
 
 function resolveTargetArgs(
 	args: Record<string, unknown>,
@@ -62,7 +59,7 @@ const targetShape = {
 // ─── Tool Registration ──────────────────────────────────────────────────────
 
 export function registerTools(server: McpServer) {
-	// Lifecycle
+	// ── Lifecycle ─────────────────────────────────────────────────────────────
 	server.registerTool(
 		"start_app",
 		{
@@ -105,34 +102,25 @@ export function registerTools(server: McpServer) {
 		handleListDevices,
 	);
 
-	// Interaction
+	// ── Interaction ───────────────────────────────────────────────────────────
 	server.registerTool(
 		"tap",
 		{
-			description: "Taps on a widget identified by the target string.",
-			inputSchema: targetShape,
+			description:
+				"Taps, long-presses, or double-taps a widget. Defaults to a normal tap. Use gesture to change.",
+			inputSchema: {
+				...targetShape,
+				gesture: z
+					.enum(["tap", "long_press", "double"])
+					.optional()
+					.describe(
+						"Gesture type: 'tap' (default), 'long_press', or 'double' for double-tap",
+					),
+			},
 		},
 		async (args) => forwardToHarness("tap", args),
 	);
-	server.registerTool(
-		"long_press",
-		{ description: "Long presses on a widget.", inputSchema: targetShape },
-		async (args) => forwardToHarness("long_press", args),
-	);
-	server.registerTool(
-		"double_tap",
-		{ description: "Double taps on a widget.", inputSchema: targetShape },
-		async (args) => forwardToHarness("double_tap", args),
-	);
-	server.registerTool(
-		"get_text",
-		{
-			description:
-				"Returns the text content of a widget identified by the target string.",
-			inputSchema: targetShape,
-		},
-		async (args) => forwardToHarness("get_text", args),
-	);
+
 	server.registerTool(
 		"enter_text",
 		{
@@ -148,6 +136,17 @@ export function registerTools(server: McpServer) {
 		},
 		async (args) => forwardToHarness("enter_text", args),
 	);
+
+	server.registerTool(
+		"get_text",
+		{
+			description:
+				"Returns the text content of a widget identified by the target string.",
+			inputSchema: targetShape,
+		},
+		async (args) => forwardToHarness("get_text", args),
+	);
+
 	server.registerTool(
 		"drag_and_drop",
 		{
@@ -179,6 +178,7 @@ export function registerTools(server: McpServer) {
 			return jsonResponse(result);
 		},
 	);
+
 	server.registerTool(
 		"wipe_app_data",
 		{
@@ -190,36 +190,33 @@ export function registerTools(server: McpServer) {
 			return jsonResponse(result);
 		},
 	);
+
 	server.registerTool(
 		"scroll",
 		{
-			description: "Scrolls a widget by exact pixel deltas.",
+			description:
+				"Scrolls or swipes a widget. Use dx/dy for pixel-precise scrolling, or direction/distance for named swipe gestures.",
 			inputSchema: {
 				...targetShape,
-				dx: z.number().describe("Horizontal scroll delta"),
-				dy: z.number().describe("Vertical scroll delta"),
+				dx: z.number().optional().describe("Horizontal scroll delta in pixels"),
+				dy: z.number().optional().describe("Vertical scroll delta in pixels"),
+				direction: z
+					.enum(["up", "down", "left", "right"])
+					.optional()
+					.describe(
+						"Swipe direction (alternative to dx/dy). When set, dx/dy are computed automatically.",
+					),
+				distance: z
+					.number()
+					.optional()
+					.describe(
+						"Swipe distance in pixels when using direction (default 300)",
+					),
 			},
 		},
 		async (args) => forwardToHarness("scroll", args),
 	);
-	server.registerTool(
-		"swipe",
-		{
-			description:
-				"Swipes a widget in a named direction (simpler than scroll for common gestures).",
-			inputSchema: {
-				...targetShape,
-				direction: z
-					.enum(["up", "down", "left", "right"])
-					.describe("Swipe direction"),
-				distance: z
-					.number()
-					.optional()
-					.describe("Swipe distance in pixels (default 300)"),
-			},
-		},
-		async (args) => forwardToHarness("swipe", args),
-	);
+
 	server.registerTool(
 		"scroll_until_visible",
 		{
@@ -251,6 +248,7 @@ export function registerTools(server: McpServer) {
 			return jsonResponse(result);
 		},
 	);
+
 	server.registerTool(
 		"navigate_to",
 		{
@@ -259,6 +257,7 @@ export function registerTools(server: McpServer) {
 		},
 		async (args) => forwardToHarness("navigate_to", args),
 	);
+
 	server.registerTool(
 		"go_back",
 		{
@@ -270,6 +269,7 @@ export function registerTools(server: McpServer) {
 			return jsonResponse(result);
 		},
 	);
+
 	server.registerTool(
 		"get_current_route",
 		{
@@ -281,6 +281,7 @@ export function registerTools(server: McpServer) {
 			return jsonResponse(result);
 		},
 	);
+
 	server.registerTool(
 		"press_key",
 		{
@@ -297,71 +298,63 @@ export function registerTools(server: McpServer) {
 		async (args) => forwardToHarness("press_key", args),
 	);
 
-	// Verification
+	// ── Assertions ────────────────────────────────────────────────────────────
 	server.registerTool(
-		"assert_exists",
-		{
-			description: "Returns { success: true } if the target exists.",
-			inputSchema: targetShape,
-		},
-		async (args) => forwardToHarness("assert_exists", args),
-	);
-	server.registerTool(
-		"assert_not_exists",
-		{
-			description: "Returns { success: true } if the target does NOT exist.",
-			inputSchema: targetShape,
-		},
-		async (args) => forwardToHarness("assert_not_exists", args),
-	);
-	server.registerTool(
-		"assert_text_equals",
-		{
-			description: "Returns { success: true } if the target text matches.",
-			inputSchema: { ...targetShape, expectedText: z.string() },
-		},
-		async (args) => forwardToHarness("assert_text_equals", args),
-	);
-	server.registerTool(
-		"assert_state",
-		{
-			description: "Returns { success: true } if the target state matches.",
-			inputSchema: {
-				...targetShape,
-				stateKey: z.string().describe("e.g. 'value', 'groupValue'"),
-				expectedValue: z.boolean().describe("Expected bool value"),
-			},
-		},
-		async (args) => forwardToHarness("assert_state", args),
-	);
-	server.registerTool(
-		"assert_visible",
+		"assert",
 		{
 			description:
-				"Returns { success: true } if the target is painted and visible in the viewport.",
-			inputSchema: targetShape,
-		},
-		async (args) => forwardToHarness("assert_visible", args),
-	);
-	server.registerTool(
-		"assert_enabled",
-		{
-			description:
-				"Returns { success: true } if the target is interactively enabled.",
+				"Runs an assertion check on a widget. Use 'check' to specify the type: exists, not_exists, text_equals, state, visible, or enabled.",
 			inputSchema: {
 				...targetShape,
-				expected: z.boolean().describe("Expected enabled state"),
+				check: z
+					.enum([
+						"exists",
+						"not_exists",
+						"text_equals",
+						"state",
+						"visible",
+						"enabled",
+					])
+					.describe("Type of assertion to perform"),
+				expected: z
+					.union([z.string(), z.boolean()])
+					.optional()
+					.describe(
+						"Expected value. Required for text_equals (string) and enabled (boolean).",
+					),
+				stateKey: z
+					.string()
+					.optional()
+					.describe(
+						"Widget state property to check (e.g. 'value', 'groupValue'). Required for check='state'.",
+					),
 			},
 		},
-		async (args) => forwardToHarness("assert_enabled", args),
+		async (args) => {
+			const payload = resolveTargetArgs(args);
+			// Map 'expected' to the field names the harness expects
+			const check = payload.check as string;
+			if (check === "text_equals" && payload.expected !== undefined) {
+				payload.expectedText = payload.expected;
+				delete payload.expected;
+			}
+			if (check === "state" && payload.expected !== undefined) {
+				payload.expectedValue = payload.expected;
+				delete payload.expected;
+			}
+			const result = await sendRpc("assert", payload);
+			return jsonResponse(result);
+		},
 	);
 
-	// Inspection
+	// ── Inspection ────────────────────────────────────────────────────────────
 	server.registerTool(
-		"take_screenshot",
+		"screenshot",
 		{
-			description: "Captures a screenshot of the running app.",
+			description:
+				"Captures a screenshot. Without a target, captures the full app. With a target, captures a specific widget.",
 			inputSchema: {
+				...targetShape,
 				save_path: z
 					.string()
 					.optional()
@@ -371,50 +364,14 @@ export function registerTools(server: McpServer) {
 				type: z
 					.enum(["app", "device", "skia"])
 					.optional()
-					.describe("The type of screenshot to retrieve."),
+					.describe(
+						"Screenshot type (only for full-app screenshots). Defaults to 'app'.",
+					),
 			},
 		},
-		handleTakeScreenshot,
+		handleScreenshot,
 	);
-	server.registerTool(
-		"screenshot_element",
-		{
-			description:
-				"Captures a screenshot of a specific widget (returns base64 PNG).",
-			inputSchema: {
-				...targetShape,
-				save_path: z
-					.string()
-					.optional()
-					.describe("Optional path to save the screenshot file"),
-			},
-		},
-		async (args) => {
-			const payload = resolveTargetArgs(args);
-			const savePath =
-				typeof payload.save_path === "string" ? payload.save_path : undefined;
-			delete payload.save_path;
-			const result = (await sendRpc(
-				"screenshot_element",
-				payload,
-			)) as ScreenshotResult;
-			if (result.error) throw new Error(result.error);
-			if (savePath) {
-				await fs.writeFile(savePath, Buffer.from(result.data, "base64"));
-				return textResponse(`Element screenshot saved to ${savePath}`);
-			}
-			return {
-				content: [
-					{ type: "text" as const, text: "Element screenshot captured:" },
-					{
-						type: "image" as const,
-						data: result.data,
-						mimeType: "image/png",
-					},
-				],
-			};
-		},
-	);
+
 	server.registerTool(
 		"get_widget_tree",
 		{
@@ -428,6 +385,7 @@ export function registerTools(server: McpServer) {
 		},
 		async (args) => forwardToHarness("get_widget_tree", args),
 	);
+
 	server.registerTool(
 		"get_accessibility_tree",
 		{
@@ -441,6 +399,7 @@ export function registerTools(server: McpServer) {
 		},
 		async (args) => forwardToHarness("get_accessibility_tree", args),
 	);
+
 	server.registerTool(
 		"explore_screen",
 		{
@@ -488,38 +447,35 @@ export function registerTools(server: McpServer) {
 						data.interactive_elements_count = data.elements.length;
 						textContent.text = JSON.stringify(data, null, 2);
 					}
-				} catch (e) {
+				} catch (_e) {
 					// pass
 				}
 			}
 			return result;
 		},
 	);
+
+	// ── Waits ─────────────────────────────────────────────────────────────────
 	server.registerTool(
 		"wait_for",
 		{
-			description: "Waits for a widget to appear.",
+			description:
+				"Waits for a widget to appear or disappear. Set gone=true to wait for disappearance (e.g. loading spinners).",
 			inputSchema: {
 				...targetShape,
 				timeout: z.number().optional().describe("Timeout in milliseconds"),
+				gone: z
+					.boolean()
+					.optional()
+					.describe(
+						"If true, waits for the widget to disappear instead of appear",
+					),
 			},
 		},
 		async (args) => forwardToHarness("wait_for", args),
 	);
-	server.registerTool(
-		"wait_for_gone",
-		{
-			description:
-				"Waits for a widget to disappear (e.g. a loading spinner or dismissing dialog).",
-			inputSchema: {
-				...targetShape,
-				timeout: z.number().optional().describe("Timeout in milliseconds"),
-			},
-		},
-		async (args) => forwardToHarness("wait_for_gone", args),
-	);
 
-	// Environment
+	// ── Environment ───────────────────────────────────────────────────────────
 	server.registerTool(
 		"simulate_background",
 		{
@@ -534,6 +490,7 @@ export function registerTools(server: McpServer) {
 		},
 		handleSimulateBackground,
 	);
+
 	server.registerTool(
 		"set_network_status",
 		{
@@ -542,6 +499,7 @@ export function registerTools(server: McpServer) {
 		},
 		handleSetNetworkStatus,
 	);
+
 	server.registerTool(
 		"intercept_network",
 		{
@@ -554,7 +512,7 @@ export function registerTools(server: McpServer) {
 		async (args) => forwardToHarness("intercept_network", args),
 	);
 
-	// Utility
+	// ── Utility ───────────────────────────────────────────────────────────────
 	server.registerTool(
 		"read_logs",
 		{
@@ -571,6 +529,7 @@ export function registerTools(server: McpServer) {
 			return textResponse(recentDaemonLogs.slice(-count).join("\\n"));
 		},
 	);
+
 	server.registerTool(
 		"validate_project",
 		{
@@ -588,12 +547,12 @@ export function registerTools(server: McpServer) {
 		handleValidateProject,
 	);
 
-	// ── Composite Actions ────────────────────────────────────────────────────
+	// ── Composite Actions ─────────────────────────────────────────────────────
 	server.registerTool(
 		"batch_actions",
 		{
 			description:
-				"Execute multiple actions in a single call. Each action is run sequentially with pumpAndSettle between them. Stops on first error. Supported tools: tap, enter_text, long_press, double_tap, scroll, swipe, assert_exists, assert_not_exists, assert_text_equals, wait_for, wait_for_gone, press_key.",
+				"Execute multiple actions in a single call. Each action is run sequentially with pumpAndSettle between them. Stops on first error. Supported tools: tap, enter_text, scroll, assert, wait_for, press_key, screenshot, get_text, explore_screen.",
 			inputSchema: {
 				actions: z
 					.array(
@@ -612,11 +571,26 @@ export function registerTools(server: McpServer) {
 				tool: string;
 				args: Record<string, unknown>;
 			}>;
-			// Resolve target strings in each action's args before forwarding
-			const resolvedActions = actions.map((action) => ({
-				tool: action.tool,
-				args: resolveTargetArgs(action.args),
-			}));
+			// Resolve target strings and map assert fields in each action's args before forwarding
+			const resolvedActions = actions.map((action) => {
+				const resolved = resolveTargetArgs(action.args);
+				// Map assert expected/expectedText/expectedValue for harness compatibility
+				if (action.tool === "assert") {
+					const check = resolved.check as string | undefined;
+					if (check === "text_equals" && resolved.expected !== undefined) {
+						resolved.expectedText = resolved.expected;
+						delete resolved.expected;
+					}
+					if (check === "state" && resolved.expected !== undefined) {
+						resolved.expectedValue = resolved.expected;
+						delete resolved.expected;
+					}
+				}
+				return {
+					tool: action.tool,
+					args: resolved,
+				};
+			});
 			const result = await sendRpc("batch_actions", {
 				actions: resolvedActions,
 			});
@@ -624,7 +598,7 @@ export function registerTools(server: McpServer) {
 		},
 	);
 
-	// ── Animation ────────────────────────────────────────────────────────────
+	// ── Animation ─────────────────────────────────────────────────────────────
 	server.registerTool(
 		"wait_for_animation",
 		{

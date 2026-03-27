@@ -322,8 +322,17 @@ void main() {
         Object? result;
         switch (method) {
           case 'tap':
-            final tapChanges = await _withChangeDetection(tester, () => _handleTap(tester, params));
-            if (tapChanges != null) result = {'status': 'success', 'changes': tapChanges};
+            final gesture = params['gesture'] as String? ?? 'tap';
+            if (gesture == 'long_press') {
+              final changes = await _withChangeDetection(tester, () => _handleLongPress(tester, params));
+              if (changes != null) result = {'status': 'success', 'changes': changes};
+            } else if (gesture == 'double') {
+              final changes = await _withChangeDetection(tester, () => _handleDoubleTap(tester, params));
+              if (changes != null) result = {'status': 'success', 'changes': changes};
+            } else {
+              final tapChanges = await _withChangeDetection(tester, () => _handleTap(tester, params));
+              if (tapChanges != null) result = {'status': 'success', 'changes': tapChanges};
+            }
             break;
           case 'enter_text':
             await _handleEnterText(tester, params);
@@ -344,37 +353,56 @@ void main() {
             result = await _handleGetAccessibilityTree(tester, params);
             break;
           case 'scroll':
-            await _handleScroll(tester, params);
+            if (params.containsKey('direction')) {
+              await _handleSwipe(tester, params);
+            } else {
+              await _handleScroll(tester, params);
+            }
             break;
           case 'scroll_until_visible':
             await _handleScrollUntilVisible(tester, params);
             break;
           case 'wait_for':
-            await _handleWaitFor(tester, params);
+            if (params['gone'] == true) {
+              await _handleWaitForGone(tester, params);
+            } else {
+              await _handleWaitFor(tester, params);
+            }
             break;
           case 'screenshot':
-            result = await _handleScreenshot(tester);
+            if (params.containsKey('finderType') || params.containsKey('key') || params.containsKey('text') || params.containsKey('type') && params['type'] != 'app' && params['type'] != 'device' && params['type'] != 'skia') {
+              result = await _handleScreenshotElement(tester, params);
+            } else {
+              result = await _handleScreenshot(tester);
+            }
             break;
           case 'screenshot_element':
             result = await _handleScreenshotElement(tester, params);
             break;
-          case 'assert_exists':
-            result = await _handleAssertExists(tester, params);
-            break;
-          case 'assert_not_exists':
-            result = await _handleAssertNotExists(tester, params);
-            break;
-          case 'assert_text_equals':
-            result = await _handleAssertTextEquals(tester, params);
-            break;
-          case 'assert_state':
-            result = await _handleAssertState(tester, params);
-            break;
-          case 'assert_visible':
-            result = await _handleAssertVisible(tester, params);
-            break;
-          case 'assert_enabled':
-            result = await _handleAssertEnabled(tester, params);
+          case 'assert':
+            final check = params['check'] as String? ?? 'exists';
+            switch (check) {
+              case 'exists':
+                result = await _handleAssertExists(tester, params);
+                break;
+              case 'not_exists':
+                result = await _handleAssertNotExists(tester, params);
+                break;
+              case 'text_equals':
+                result = await _handleAssertTextEquals(tester, params);
+                break;
+              case 'state':
+                result = await _handleAssertState(tester, params);
+                break;
+              case 'visible':
+                result = await _handleAssertVisible(tester, params);
+                break;
+              case 'enabled':
+                result = await _handleAssertEnabled(tester, params);
+                break;
+              default:
+                throw 'Unknown assert check: $check';
+            }
             break;
           case 'navigate_to':
             result = await _handleNavigateTo(tester, params);
@@ -384,18 +412,6 @@ void main() {
             break;
           case 'get_current_route':
             result = _handleGetCurrentRoute(tester);
-            break;
-          case 'long_press':
-            await _handleLongPress(tester, params);
-            break;
-          case 'double_tap':
-            await _handleDoubleTap(tester, params);
-            break;
-          case 'swipe':
-            await _handleSwipe(tester, params);
-            break;
-          case 'wait_for_gone':
-            await _handleWaitForGone(tester, params);
             break;
           case 'press_key':
             await _handlePressKey(tester, params);
@@ -1071,38 +1087,59 @@ Future<Map<String, dynamic>> _handleBatchActions(
       Object? result;
       switch (tool) {
         case 'tap':
-          final changes = await _withChangeDetection(tester, () => _handleTap(tester, args));
-          if (changes != null) result = {'status': 'success', 'changes': changes};
+          final gesture = args['gesture'] as String? ?? 'tap';
+          if (gesture == 'long_press') {
+            final changes = await _withChangeDetection(tester, () => _handleLongPress(tester, args));
+            if (changes != null) result = {'status': 'success', 'changes': changes};
+          } else if (gesture == 'double') {
+            final changes = await _withChangeDetection(tester, () => _handleDoubleTap(tester, args));
+            if (changes != null) result = {'status': 'success', 'changes': changes};
+          } else {
+            final changes = await _withChangeDetection(tester, () => _handleTap(tester, args));
+            if (changes != null) result = {'status': 'success', 'changes': changes};
+          }
           break;
         case 'enter_text':
           await _handleEnterText(tester, args);
           break;
-        case 'long_press':
-          await _handleLongPress(tester, args);
-          break;
-        case 'double_tap':
-          await _handleDoubleTap(tester, args);
-          break;
         case 'scroll':
-          await _handleScroll(tester, args);
+          if (args.containsKey('direction')) {
+            await _handleSwipe(tester, args);
+          } else {
+            await _handleScroll(tester, args);
+          }
           break;
-        case 'swipe':
-          await _handleSwipe(tester, args);
-          break;
-        case 'assert_exists':
-          result = await _handleAssertExists(tester, args);
-          break;
-        case 'assert_not_exists':
-          result = await _handleAssertNotExists(tester, args);
-          break;
-        case 'assert_text_equals':
-          result = await _handleAssertTextEquals(tester, args);
+        case 'assert':
+          final check = args['check'] as String? ?? 'exists';
+          switch (check) {
+            case 'exists':
+              result = await _handleAssertExists(tester, args);
+              break;
+            case 'not_exists':
+              result = await _handleAssertNotExists(tester, args);
+              break;
+            case 'text_equals':
+              result = await _handleAssertTextEquals(tester, args);
+              break;
+            case 'state':
+              result = await _handleAssertState(tester, args);
+              break;
+            case 'visible':
+              result = await _handleAssertVisible(tester, args);
+              break;
+            case 'enabled':
+              result = await _handleAssertEnabled(tester, args);
+              break;
+            default:
+              throw 'Unknown assert check: $check';
+          }
           break;
         case 'wait_for':
-          await _handleWaitFor(tester, args);
-          break;
-        case 'wait_for_gone':
-          await _handleWaitForGone(tester, args);
+          if (args['gone'] == true) {
+            await _handleWaitForGone(tester, args);
+          } else {
+            await _handleWaitFor(tester, args);
+          }
           break;
         case 'press_key':
           await _handlePressKey(tester, args);
@@ -1111,10 +1148,11 @@ Future<Map<String, dynamic>> _handleBatchActions(
           result = await _handleExploreScreen(tester, args);
           break;
         case 'screenshot':
-          result = await _handleScreenshot(tester);
-          break;
-        case 'screenshot_element':
-          result = await _handleScreenshotElement(tester, args);
+          if (args.containsKey('finderType') || args.containsKey('key') || args.containsKey('text')) {
+            result = await _handleScreenshotElement(tester, args);
+          } else {
+            result = await _handleScreenshot(tester);
+          }
           break;
         case 'get_widget_tree':
           result = _handleGetWidgetTree(tester, args);

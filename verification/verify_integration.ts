@@ -31,13 +31,17 @@ async function runTests(): Promise<void> {
 		await new Promise((r) => setTimeout(r, 2000)); // let UI settle
 
 		// ── Assertions ─────────────────────────────────────────────────────────
-		step("assert_exists");
-		await callTool(client, "assert_exists", { target: 'text="Welcome Home"' });
+		step("assert (exists)");
+		await callTool(client, "assert", {
+			check: "exists",
+			target: 'text="Welcome Home"',
+		});
 
-		step("assert_text_equals");
-		await callTool(client, "assert_text_equals", {
+		step("assert (text_equals)");
+		await callTool(client, "assert", {
+			check: "text_equals",
 			target: "#welcome_text",
-			expectedText: "Welcome Home",
+			expected: "Welcome Home",
 		});
 
 		step("get_text");
@@ -59,9 +63,10 @@ async function runTests(): Promise<void> {
 			target: "#my_textfield",
 			text: "Hello World",
 		});
-		await callTool(client, "assert_text_equals", {
+		await callTool(client, "assert", {
+			check: "text_equals",
 			target: "#my_textfield",
-			expectedText: "Hello World",
+			expected: "Hello World",
 		});
 
 		// ── semanticsLabel Finder ────────────────────────────────────────────
@@ -76,28 +81,31 @@ async function runTests(): Promise<void> {
 			target: 'semanticsLabel="Search items"',
 			text: "test query",
 		});
-		await callTool(client, "assert_text_equals", {
+		await callTool(client, "assert", {
+			check: "text_equals",
 			target: "#hint_only_field",
-			expectedText: "test query",
+			expected: "test query",
 		});
 		console.log("✅ semanticsLabel finder works for hint-text fields.");
 
 		// ── State ──────────────────────────────────────────────────────────────
-		step("assert_state (checkbox false)");
-		await callTool(client, "assert_state", {
+		step("assert (state - checkbox false)");
+		await callTool(client, "assert", {
+			check: "state",
 			target: "#my_checkbox",
 			stateKey: "value",
-			expectedValue: false,
+			expected: false,
 		});
 
 		step("tap (checkbox)");
 		await callTool(client, "tap", { target: "#my_checkbox" });
 
-		step("assert_state (checkbox true)");
-		await callTool(client, "assert_state", {
+		step("assert (state - checkbox true)");
+		await callTool(client, "assert", {
+			check: "state",
 			target: "#my_checkbox",
 			stateKey: "value",
-			expectedValue: true,
+			expected: true,
 		});
 
 		// ── Exploration ────────────────────────────────────────────────────────
@@ -132,25 +140,28 @@ async function runTests(): Promise<void> {
 
 		// ── Validation of Advanced Features ─────────────────────────────────────
 
-		step("Visual Assertions - assert_enabled");
-		await callTool(client, "assert_enabled", {
+		step("assert (enabled)");
+		await callTool(client, "assert", {
+			check: "enabled",
 			target: "#elevated_submit",
 			expected: true,
 		});
-		await callTool(client, "assert_enabled", {
+		await callTool(client, "assert", {
+			check: "enabled",
 			target: "#disabled_button",
 			expected: false,
 		});
-		console.log("✅ assert_enabled works.");
+		console.log("✅ assert (enabled) works.");
 
 		step("enter_text");
 		await callTool(client, "enter_text", {
 			target: "#my_textfield",
 			text: "Hello World",
 		});
-		await callTool(client, "assert_text_equals", {
+		await callTool(client, "assert", {
+			check: "text_equals",
 			target: "#my_textfield",
-			expectedText: "Hello World",
+			expected: "Hello World",
 		});
 
 		step("enter_text (semanticsLabel)");
@@ -164,9 +175,10 @@ async function runTests(): Promise<void> {
 			target: 'semanticsLabel="Search items"',
 			text: "test query",
 		});
-		await callTool(client, "assert_text_equals", {
+		await callTool(client, "assert", {
+			check: "text_equals",
 			target: "#hint_only_field",
-			expectedText: "test query",
+			expected: "test query",
 		});
 		console.log("✅ semanticsLabel finder works for hint-text fields.");
 
@@ -178,16 +190,20 @@ async function runTests(): Promise<void> {
 			text: "enter testing",
 			action: "done",
 		});
-		await callTool(client, "assert_text_equals", {
+		await callTool(client, "assert", {
+			check: "text_equals",
 			target: "#key_press_count",
-			expectedText: "Keys Pressed: 1",
+			expected: "Keys Pressed: 1",
 		});
 		console.log("✅ enter_text triggered TextInputAction.done correctly.");
 
-		step("Visual Assertions - assert_visible offscreen");
+		step("assert (visible - offscreen)");
 		try {
-			await callTool(client, "assert_visible", { target: "#offscreen_target" });
-			throw new Error("assert_visible should have failed for offscreen widget");
+			await callTool(client, "assert", {
+				check: "visible",
+				target: "#offscreen_target",
+			});
+			throw new Error("assert visible should have failed for offscreen widget");
 		} catch (e: any) {
 			if (!e.message.includes("off-screen")) {
 				throw new Error("Expected off-screen error, got: " + e.message);
@@ -201,8 +217,11 @@ async function runTests(): Promise<void> {
 			dy: -500,
 		});
 
-		// Ensure it is now visible (validating the new pumpAndSettle in assert_visible)
-		await callTool(client, "assert_visible", { target: "#offscreen_target" });
+		// Ensure it is now visible (validating the new pumpAndSettle in assert visible)
+		await callTool(client, "assert", {
+			check: "visible",
+			target: "#offscreen_target",
+		});
 
 		// ── Nested target scroll_until_visible ──────────────────────────────────
 		step("scroll_until_visible (nested list)");
@@ -227,7 +246,7 @@ async function runTests(): Promise<void> {
 		});
 
 		console.log(
-			"✅ assert_visible, scroll, and scroll_until_visible work correctly on main axis.",
+			"✅ assert (visible), scroll, and scroll_until_visible work correctly on main axis.",
 		);
 
 		step("Compound Selectors");
@@ -293,13 +312,15 @@ async function runTests(): Promise<void> {
 		step("go_back (overlay dismissal)");
 		// tap handler calls ensureVisible() which scrolls the button into view
 		await callTool(client, "tap", { target: "#show_bottom_sheet" });
-		await callTool(client, "assert_exists", {
+		await callTool(client, "assert", {
+			check: "exists",
 			target: 'text="Bottom Sheet Content"',
 		});
 		await callTool(client, "go_back");
 		// Brief wait for dismissal animation
 		await new Promise((r) => setTimeout(r, 500));
-		await callTool(client, "assert_not_exists", {
+		await callTool(client, "assert", {
+			check: "not_exists",
 			target: 'text="Bottom Sheet Content"',
 		});
 		console.log("✅ go_back dismisses bottom sheet overlay.");
@@ -310,8 +331,8 @@ async function runTests(): Promise<void> {
 			actions: [
 				{ tool: "tap", args: { target: "#my_checkbox" } },
 				{
-					tool: "assert_exists",
-					args: { target: "#my_checkbox" },
+					tool: "assert",
+					args: { check: "exists", target: "#my_checkbox" },
 				},
 				{ tool: "tap", args: { target: "#my_checkbox" } },
 			],
@@ -381,9 +402,9 @@ async function runTests(): Promise<void> {
 		);
 
 		// ── Screenshot ─────────────────────────────────────────────────────────
-		step("take_screenshot (app mode)");
+		step("screenshot (full app)");
 		const screenshotPath = "/tmp/flutter_pilot_verify_screenshot.png";
-		await callTool(client, "take_screenshot", {
+		await callTool(client, "screenshot", {
 			save_path: screenshotPath,
 			type: "app",
 		});
@@ -406,36 +427,50 @@ async function runTests(): Promise<void> {
 		});
 		await callTool(client, "tap", { target: "#fetch_button" });
 		await new Promise((r) => setTimeout(r, 1000));
-		await callTool(client, "assert_text_equals", {
+		await callTool(client, "assert", {
+			check: "text_equals",
 			target: "#network_result",
-			expectedText: "Mocked Response Body",
+			expected: "Mocked Response Body",
 		});
 
-		// ── Long Press ────────────────────────────────────────────────────────
-		step("long_press");
-		await callTool(client, "long_press", { target: "#long_press_target" });
-		await callTool(client, "assert_text_equals", {
+		// ── Long Press (via gesture) ──────────────────────────────────────────
+		step("tap (gesture: long_press)");
+		await callTool(client, "tap", {
+			target: "#long_press_target",
+			gesture: "long_press",
+		});
+		await callTool(client, "assert", {
+			check: "text_equals",
 			target: "#long_press_status",
-			expectedText: "Long pressed!",
+			expected: "Long pressed!",
 		});
 
-		// ── Double Tap ────────────────────────────────────────────────────────
-		step("double_tap");
-		await callTool(client, "double_tap", { target: "#double_tap_target" });
-		await callTool(client, "assert_text_equals", {
+		// ── Double Tap (via gesture) ──────────────────────────────────────────
+		step("tap (gesture: double)");
+		await callTool(client, "tap", {
+			target: "#double_tap_target",
+			gesture: "double",
+		});
+		await callTool(client, "assert", {
+			check: "text_equals",
 			target: "#double_tap_count",
-			expectedText: "1",
+			expected: "1",
 		});
 
-		// ── Wait For Gone ─────────────────────────────────────────────────────
-		step("wait_for_gone");
-		await callTool(client, "assert_exists", { target: "#dismissable_widget" });
+		// ── Wait For Gone (via gone flag) ─────────────────────────────────────
+		step("wait_for (gone: true)");
+		await callTool(client, "assert", {
+			check: "exists",
+			target: "#dismissable_widget",
+		});
 		await callTool(client, "tap", { target: "#toggle_visibility" });
-		await callTool(client, "wait_for_gone", {
+		await callTool(client, "wait_for", {
 			target: "#dismissable_widget",
 			timeout: 3000,
+			gone: true,
 		});
-		await callTool(client, "assert_not_exists", {
+		await callTool(client, "assert", {
+			check: "not_exists",
 			target: "#dismissable_widget",
 		});
 
@@ -455,11 +490,11 @@ async function runTests(): Promise<void> {
 		await callTool(client, "press_key", { key: "tab" });
 		// Just verify it doesn't throw — key events are hard to assert visually
 
-		// ── Screenshot Element ────────────────────────────────────────────────
-		step("screenshot_element");
+		// ── Screenshot Element (via target) ──────────────────────────────────
+		step("screenshot (element)");
 		const elementScreenshotPath =
 			"/tmp/flutter_pilot_verify_element_screenshot.png";
-		await callTool(client, "screenshot_element", {
+		await callTool(client, "screenshot", {
 			target: "#welcome_text",
 			save_path: elementScreenshotPath,
 		});
@@ -477,40 +512,49 @@ async function runTests(): Promise<void> {
 		// ── Navigation ─────────────────────────────────────────────────────────
 		step("navigate_to");
 		await callTool(client, "navigate_to", { route: "/details" });
-		await callTool(client, "assert_exists", { target: 'text="Item 5"' });
+		await callTool(client, "assert", {
+			check: "exists",
+			target: 'text="Item 5"',
+		});
 
-		// ── Swipe ──────────────────────────────────────────────────────────────
-		step("swipe (up on list)");
-		await callTool(client, "swipe", {
+		// ── Swipe (via scroll + direction) ────────────────────────────────────
+		step("scroll (direction: up)");
+		await callTool(client, "scroll", {
 			target: 'type="ListView"',
 			direction: "up",
 			distance: 500,
 		});
-		await callTool(client, "assert_exists", { target: 'text="Item 20"' });
+		await callTool(client, "assert", {
+			check: "exists",
+			target: 'text="Item 20"',
+		});
 
 		await callTool(client, "go_back");
 
 		// ── Drag and Drop ────────────────────────────────────────────────────────
 		step("drag_and_drop (reorder)");
 		await callTool(client, "navigate_to", { route: "/reorder" });
-		await callTool(client, "assert_text_equals", {
+		await callTool(client, "assert", {
+			check: "text_equals",
 			target: "#index_Item A",
-			expectedText: "Index 0",
+			expected: "Index 0",
 		});
 		await callTool(client, "drag_and_drop", {
 			from: 'text="Item A"',
 			to: 'text="Item C"',
 			duration_ms: 1000,
 		});
-		await callTool(client, "assert_text_equals", {
+		await callTool(client, "assert", {
+			check: "text_equals",
 			target: "#index_Item A",
-			expectedText: "Index 2",
+			expected: "Index 2",
 		});
 
 		// ── Go Back ───────────────────────────────────────────────────────────
 		step("go_back");
 		await callTool(client, "go_back");
-		await callTool(client, "assert_exists", {
+		await callTool(client, "assert", {
+			check: "exists",
 			target: 'text="Welcome Home"',
 		});
 
@@ -553,17 +597,19 @@ async function runTests(): Promise<void> {
 		const expectedCount = currentCount + 1;
 
 		await callTool(client, "tap", { target: "#save_pref_button" });
-		await callTool(client, "assert_text_equals", {
+		await callTool(client, "assert", {
+			check: "text_equals",
 			target: "#pref_counter",
-			expectedText: `Counter: ${expectedCount}`,
+			expected: `Counter: ${expectedCount}`,
 		});
 
 		step("pilot_hot_restart (validate persistence)");
 		await callTool(client, "pilot_hot_restart");
 		await new Promise((r) => setTimeout(r, 2000));
-		await callTool(client, "assert_text_equals", {
+		await callTool(client, "assert", {
+			check: "text_equals",
 			target: "#pref_counter",
-			expectedText: `Counter: ${expectedCount}`,
+			expected: `Counter: ${expectedCount}`,
 		});
 
 		step("wipe_app_data (execution)");
@@ -578,9 +624,10 @@ async function runTests(): Promise<void> {
 		// which might NOT be cleared by deleting app directories.
 		// If this fails, we will capture the error but not abort the entire test if we're on macOS.
 		try {
-			await callTool(client, "assert_text_equals", {
+			await callTool(client, "assert", {
+				check: "text_equals",
 				target: "#pref_counter",
-				expectedText: "Counter: 0",
+				expected: "Counter: 0",
 			});
 			console.log("✅ State wiped successfully.");
 		} catch (_e) {

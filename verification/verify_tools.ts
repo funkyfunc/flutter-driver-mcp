@@ -58,14 +58,10 @@ const EXPECTED_TOOLS = [
 	"pilot_hot_restart",
 	"list_devices",
 	"tap",
-	"long_press",
-	"double_tap",
 	"enter_text",
 	"scroll",
-	"swipe",
 	"scroll_until_visible",
 	"wait_for",
-	"wait_for_gone",
 	"press_key",
 	"get_text",
 	"drag_and_drop",
@@ -73,12 +69,8 @@ const EXPECTED_TOOLS = [
 	"get_widget_tree",
 	"get_accessibility_tree",
 	"explore_screen",
-	"take_screenshot",
-	"screenshot_element",
-	"assert_exists",
-	"assert_not_exists",
-	"assert_text_equals",
-	"assert_state",
+	"screenshot",
+	"assert",
 	"navigate_to",
 	"go_back",
 	"get_current_route",
@@ -87,6 +79,8 @@ const EXPECTED_TOOLS = [
 	"set_network_status",
 	"read_logs",
 	"validate_project",
+	"batch_actions",
+	"wait_for_animation",
 ];
 
 async function main(): Promise<void> {
@@ -110,18 +104,62 @@ async function main(): Promise<void> {
 		}
 	}
 
-	// Spot-check a specific property
-	const getWidgetTree = tools.find(
-		(t: McpTool) => t.name === "get_widget_tree",
-	);
-	if (!getWidgetTree?.inputSchema?.properties?.summaryOnly) {
-		console.error("❌ get_widget_tree missing 'summaryOnly' property");
+	// Check that old tool names are NOT present (consolidation verification)
+	const REMOVED_TOOLS = [
+		"long_press",
+		"double_tap",
+		"swipe",
+		"wait_for_gone",
+		"take_screenshot",
+		"screenshot_element",
+		"assert_exists",
+		"assert_not_exists",
+		"assert_text_equals",
+		"assert_state",
+		"assert_visible",
+		"assert_enabled",
+	];
+	for (const removed of REMOVED_TOOLS) {
+		if (toolNames.has(removed)) {
+			console.error(`❌ Tool should have been removed: ${removed}`);
+			passed = false;
+		}
+	}
+
+	// Spot-check consolidated tool schemas
+	const tapTool = tools.find((t: McpTool) => t.name === "tap");
+	if (!tapTool?.inputSchema?.properties?.gesture) {
+		console.error("❌ tap tool missing 'gesture' property");
+		passed = false;
+	}
+
+	const assertTool = tools.find((t: McpTool) => t.name === "assert");
+	if (!assertTool?.inputSchema?.properties?.check) {
+		console.error("❌ assert tool missing 'check' property");
+		passed = false;
+	}
+
+	const scrollTool = tools.find((t: McpTool) => t.name === "scroll");
+	if (!scrollTool?.inputSchema?.properties?.direction) {
+		console.error("❌ scroll tool missing 'direction' property");
+		passed = false;
+	}
+
+	const waitForTool = tools.find((t: McpTool) => t.name === "wait_for");
+	if (!waitForTool?.inputSchema?.properties?.gone) {
+		console.error("❌ wait_for tool missing 'gone' property");
+		passed = false;
+	}
+
+	const screenshotTool = tools.find((t: McpTool) => t.name === "screenshot");
+	if (!screenshotTool?.inputSchema?.properties?.target) {
+		console.error("❌ screenshot tool missing 'target' property");
 		passed = false;
 	}
 
 	if (passed) {
 		console.log(
-			`✅ All ${EXPECTED_TOOLS.length} expected tools found with correct schemas.`,
+			`✅ All ${EXPECTED_TOOLS.length} expected tools found with correct schemas. ${REMOVED_TOOLS.length} old tools confirmed removed.`,
 		);
 	}
 

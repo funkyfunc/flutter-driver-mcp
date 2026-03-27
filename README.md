@@ -10,7 +10,7 @@ Flutter Driver MCP bridges your LLM (Claude, Gemini, etc.) to a running Flutter 
 
 **Zero-config injection.** No changes to your app's source code. The harness is auto-injected at launch time — just point at a project path and go.
 
-**Focused, LLM-optimized toolset.** ~30 purpose-built tools instead of hundreds. Every tool description fits comfortably in an LLM context window without drowning the model in irrelevant options.
+**Focused, LLM-optimized toolset.** ~28 purpose-built tools instead of hundreds. Every tool description fits comfortably in an LLM context window without drowning the model in irrelevant options.
 
 **Suggestive errors.** When a widget isn't found, the harness fuzzy-matches against the live widget tree and returns **"Did you mean…?"** suggestions — dramatically reducing agent retry loops and wasted tokens.
 
@@ -23,12 +23,12 @@ Flutter Driver MCP bridges your LLM (Claude, Gemini, etc.) to a running Flutter 
 | Category | Tools |
 |---|---|
 | **Lifecycle** | `start_app` · `stop_app` · `pilot_hot_restart` · `list_devices` |
-| **Interaction** | `tap` · `long_press` · `double_tap` · `enter_text` · `scroll` · `swipe` · `drag_and_drop` · `scroll_until_visible` · `wait_for` · `wait_for_gone` · `press_key` |
-| **Inspection** | `get_widget_tree` · `get_accessibility_tree` · `explore_screen` · `get_text` · `take_screenshot` · `screenshot_element` |
-| **Assertions** | `assert_exists` · `assert_not_exists` · `assert_text_equals` · `assert_state` |
+| **Interaction** | `tap` · `enter_text` · `scroll` · `drag_and_drop` · `scroll_until_visible` · `wait_for` · `press_key` |
+| **Inspection** | `get_widget_tree` · `get_accessibility_tree` · `explore_screen` · `get_text` · `screenshot` |
+| **Assertions** | `assert` |
 | **Navigation** | `navigate_to` · `go_back` · `get_current_route` |
 | **Environment** | `simulate_background` · `set_network_status` · `intercept_network` |
-| **Utilities** | `validate_project` · `read_logs` · `wipe_app_data` |
+| **Utilities** | `validate_project` · `read_logs` · `wipe_app_data` · `batch_actions` · `wait_for_animation` |
 
 ### Unified Selectors
 
@@ -130,16 +130,12 @@ Once your MCP client is connected, ask the agent to:
 
 | Tool | Description |
 |---|---|
-| `tap` | Taps a widget. Automatically scrolls it into view first. |
-| `long_press` | Long presses on a widget (triggers `onLongPress` callbacks). |
-| `double_tap` | Double taps on a widget (triggers `onDoubleTap` callbacks). |
+| `tap` | Taps, long-presses, or double-taps a widget. Set `gesture: "long_press"` or `gesture: "double"` to change behavior. Defaults to a normal tap. Automatically scrolls it into view first. |
 | `enter_text` | Enters text into a `TextField`. Supports finding fields by hint text via `semanticsLabel="Hint"`. Optionally sends a `TextInputAction` (e.g. `done`, `search`). |
-| `scroll` | Drags a widget by `(dx, dy)`. |
-| `swipe` | Swipes a widget in a named direction (`up`, `down`, `left`, `right`) with configurable distance. |
+| `scroll` | Scrolls or swipes a widget. Use `dx`/`dy` for pixel-precise scrolling, or `direction` (`up`/`down`/`left`/`right`) + optional `distance` for named swipe gestures. |
 | `drag_and_drop` | Drags from a source widget to a destination widget or custom pixel offset. |
 | `scroll_until_visible` | Scrolls a scrollable container until a target widget appears. |
-| `wait_for` | Polls until a widget appears (with timeout). |
-| `wait_for_gone` | Polls until a widget disappears (with timeout). Useful for loading spinners and auto-dismissing dialogs. |
+| `wait_for` | Polls until a widget appears (with timeout). Set `gone: true` to wait for disappearance instead (e.g. loading spinners). |
 | `press_key` | Simulates a keyboard key press (enter, tab, escape, backspace, arrow keys, etc.). |
 
 ### Inspection
@@ -150,17 +146,13 @@ Once your MCP client is connected, ask the agent to:
 | `get_accessibility_tree` | Returns the Semantics tree — compact, labels-focused, ideal for LLMs. Pass `includeRect: true` if coordinates are needed. |
 | `explore_screen` | Maps all interactive elements on the current screen using the native Semantics tree. Each element includes a `suggestedTarget` — a copy-pasteable selector string guaranteed to work with interaction tools. |
 | `get_text` | Returns the raw text string from a widget (supports `Text`, `EditableText`, and `RichText` descendants). |
-| `take_screenshot` | Captures a PNG screenshot. Defaults to `type: "app"` (recommended) for maximum reliability; `"device"` uses native capture. |
-| `screenshot_element` | Captures a PNG screenshot of a specific widget by target. Useful for visual regression of individual components. |
+| `screenshot` | Captures a PNG screenshot. Without a `target`, captures the full app (defaults to `type: "app"`). With a `target`, captures that specific widget. |
 
 ### Assertions
 
 | Tool | Description |
 |---|---|
-| `assert_exists` | Checks that a widget matching the target is in the tree. |
-| `assert_not_exists` | Checks that no widget matching the target exists. |
-| `assert_text_equals` | Checks that a widget's text content matches the expected value. |
-| `assert_state` | Checks a widget's boolean state (e.g. `Checkbox.value`, `Switch.value`). |
+| `assert` | Runs an assertion on a widget. Use `check` to specify the type: `exists`, `not_exists`, `text_equals` (with `expected`), `state` (with `stateKey` + `expected`), `visible`, or `enabled` (with `expected`). |
 
 ### Navigation & Environment
 
@@ -222,14 +214,14 @@ Use for **code-level** work — things you'd do in an IDE:
 ### Flutter Driver MCP Server
 Use for **live UI** work — things a real user would do:
 - Launching the app on a device (`list_devices`, `start_app`)
-- Tapping, typing, scrolling, swiping, dragging (`tap`, `long_press`, `double_tap`, `enter_text`, `scroll`, `swipe`, `drag_and_drop`, `press_key`)
-- Checking what's on screen (`explore_screen`, `get_widget_tree`, `take_screenshot`, `screenshot_element`, `get_text`)
-- Asserting UI state (`assert_exists`, `assert_not_exists`, `assert_text_equals`, `assert_state`)
+- Tapping, typing, scrolling, swiping, dragging (`tap` with `gesture`, `enter_text`, `scroll` with `direction`, `drag_and_drop`, `press_key`)
+- Checking what's on screen (`explore_screen`, `get_widget_tree`, `screenshot`, `get_text`)
+- Asserting UI state (`assert` with `check`: `exists`, `not_exists`, `text_equals`, `state`, `visible`, `enabled`)
 - Mocking network responses (`intercept_network`)
 - Navigating (`navigate_to`, `go_back`, `get_current_route`)
 - Simulating environment (`simulate_background`, `set_network_status`)
 - Wiping app data (`wipe_app_data`)
-- Executing scoped waits (`wait_for`, `wait_for_gone`)
+- Executing scoped waits (`wait_for` with `gone` flag)
 
 ### Key Rules
 - **Hot restart**: Use `pilot_hot_restart` if the app was started via Driver's `start_app`.

@@ -5,7 +5,7 @@ import { execa } from "execa";
 import { sendRpc } from "../infra/rpc.js";
 import { type activeAppSession, requireSession } from "../session.js";
 import { SCREENSHOT_DIR, type ScreenshotResult } from "../types.js";
-import { textResponse } from "../utils.js";
+import { parseTarget, textResponse } from "../utils.js";
 
 async function captureAppRenderScreenshot(savePath?: string) {
 	const result = (await sendRpc("screenshot", {})) as ScreenshotResult;
@@ -19,6 +19,41 @@ async function captureAppRenderScreenshot(savePath?: string) {
 		content: [
 			{ type: "text" as const, text: "Screenshot captured:" },
 			{ type: "image" as const, data: result.data, mimeType: "image/png" },
+		],
+	};
+}
+
+async function captureElementScreenshot(
+	args: Record<string, unknown>,
+	savePath?: string,
+) {
+	const payload = { ...args };
+	if (typeof payload.target === "string") {
+		const finder = parseTarget(payload.target);
+		delete payload.target;
+		Object.assign(payload, finder);
+	}
+	delete payload.save_path;
+	delete payload.type;
+
+	const result = (await sendRpc(
+		"screenshot_element",
+		payload,
+	)) as ScreenshotResult;
+	if (result.error) throw new Error(result.error);
+
+	if (savePath) {
+		await fs.writeFile(savePath, Buffer.from(result.data, "base64"));
+		return textResponse(`Element screenshot saved to ${savePath}`);
+	}
+	return {
+		content: [
+			{ type: "text" as const, text: "Element screenshot captured:" },
+			{
+				type: "image" as const,
+				data: result.data,
+				mimeType: "image/png",
+			},
 		],
 	};
 }
@@ -85,14 +120,21 @@ async function captureNativeDeviceScreenshot(
 	};
 }
 
-export async function handleTakeScreenshot(args: {
+export async function handleScreenshot(args: {
+	target?: string;
 	save_path?: string;
 	type?: string;
 }) {
 	const currentSession = requireSession();
 	const savePath = args.save_path;
-	const screenshotType = args.type || "app";
 
+	// If a target is provided, capture an element screenshot
+	if (args.target) {
+		return captureElementScreenshot(args, savePath);
+	}
+
+	// Full-app screenshot
+	const screenshotType = args.type || "app";
 	if (screenshotType === "app") {
 		return captureAppRenderScreenshot(savePath);
 	}
