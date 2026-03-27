@@ -124,10 +124,17 @@ export function registerTools(server: McpServer) {
 	server.registerTool(
 		"enter_text",
 		{
-			description: "Enters text into a widget found by the target string.",
+			description:
+				"Enters text into a widget found by the target string. By default, replaces existing text. Set clearFirst to explicitly clear and re-focus the field before typing.",
 			inputSchema: {
 				...targetShape,
 				text: z.string().describe("Text to enter"),
+				clearFirst: z
+					.boolean()
+					.optional()
+					.describe(
+						"If true, clears any existing text and re-focuses the field before entering new text",
+					),
 				action: z
 					.string()
 					.optional()

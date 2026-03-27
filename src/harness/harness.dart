@@ -354,7 +354,7 @@ void main() {
             break;
           case 'scroll':
             if (params.containsKey('direction')) {
-              await _handleSwipe(tester, params);
+              result = await _handleSwipe(tester, params);
             } else {
               result = await _handleScroll(tester, params);
             }
@@ -673,6 +673,16 @@ Future<void> _handleEnterText(WidgetTester tester, Map<String, dynamic> params) 
      throw StateError('Target does not accept text input. Ensure the widget is a TextField or EditableText.');
   }
 
+  final clearFirst = params['clearFirst'] as bool? ?? false;
+  if (clearFirst) {
+    // Focus the field and clear existing text before entering new text
+    await tester.tap(result.finder);
+    await tester.pumpAndSettle();
+    // Replace with empty to clear, then enter new text
+    await tester.enterText(result.finder, '');
+    await tester.pumpAndSettle();
+  }
+
   final text = params['text'] as String;
   await tester.enterText(result.finder, text);
   await tester.pumpAndSettle();
@@ -800,11 +810,27 @@ Future<Map<String, dynamic>> _handleScroll(WidgetTester tester, Map<String, dyna
   bool isScrollable = false;
   ScrollPosition? scrollPosition;
   for (final element in result.elements) {
+    // Direct Scrollable
     if (element.widget is Scrollable) {
        isScrollable = true;
        scrollPosition = (element.widget as Scrollable).controller?.position;
        break;
     }
+    // ScrollView subclass (ListView, GridView, CustomScrollView etc.)
+    if (element.widget is ScrollView) {
+       isScrollable = true;
+       scrollPosition = (element.widget as ScrollView).controller?.position;
+       break;
+    }
+    // Check descendants for a Scrollable child
+    final scrollableDescendant = find.descendant(of: find.byElementPredicate((e) => e == element), matching: find.byType(Scrollable));
+    if (scrollableDescendant.evaluate().isNotEmpty) {
+       isScrollable = true;
+       final scrollableWidget = scrollableDescendant.evaluate().first.widget as Scrollable;
+       scrollPosition = scrollableWidget.controller?.position;
+       break;
+    }
+    // Check ancestors for a Scrollable parent
     bool foundScrollableAncestor = false;
     element.visitAncestorElements((ancestor) {
        if (ancestor.widget is Scrollable) {
@@ -1117,7 +1143,7 @@ Future<Map<String, dynamic>> _handleBatchActions(
           break;
         case 'scroll':
           if (args.containsKey('direction')) {
-            await _handleSwipe(tester, args);
+            result = await _handleSwipe(tester, args);
           } else {
             result = await _handleScroll(tester, args);
           }
@@ -1559,10 +1585,53 @@ Future<void> _handleDoubleTap(WidgetTester tester, Map<String, dynamic> params) 
 
 // ─── Swipe (Directional) ─────────────────────────────────────────────────────
 
-Future<void> _handleSwipe(WidgetTester tester, Map<String, dynamic> params) async {
+Future<Map<String, dynamic>> _handleSwipe(WidgetTester tester, Map<String, dynamic> params) async {
   final result = await _resolveWidgetFinderWithWait(tester, params);
   final direction = params['direction'] as String? ?? 'up';
   final distance = (params['distance'] as num?)?.toDouble() ?? 300.0;
+
+  // Verify the target is scrollable or inside/contains a scrollable container
+  bool isScrollable = false;
+  ScrollPosition? scrollPosition;
+  for (final element in result.elements) {
+    // Direct Scrollable
+    if (element.widget is Scrollable) {
+       isScrollable = true;
+       scrollPosition = (element.widget as Scrollable).controller?.position;
+       break;
+    }
+    // ScrollView subclass (ListView, GridView, CustomScrollView etc.)
+    if (element.widget is ScrollView) {
+       isScrollable = true;
+       scrollPosition = (element.widget as ScrollView).controller?.position;
+       break;
+    }
+    // Check descendants for a Scrollable child
+    final scrollableDescendant = find.descendant(of: find.byElementPredicate((e) => e == element), matching: find.byType(Scrollable));
+    if (scrollableDescendant.evaluate().isNotEmpty) {
+       isScrollable = true;
+       final scrollableWidget = scrollableDescendant.evaluate().first.widget as Scrollable;
+       scrollPosition = scrollableWidget.controller?.position;
+       break;
+    }
+    // Check ancestors for a Scrollable parent
+    bool foundScrollableAncestor = false;
+    element.visitAncestorElements((ancestor) {
+       if (ancestor.widget is Scrollable) {
+          foundScrollableAncestor = true;
+          scrollPosition = (ancestor.widget as Scrollable).controller?.position;
+          return false;
+       }
+       return true;
+    });
+    if (foundScrollableAncestor) {
+       isScrollable = true; break;
+    }
+  }
+
+  if (!isScrollable) {
+     throw StateError('Target widget is not scrollable and is not inside a scrollable container. Use tap() instead for non-scrollable elements.');
+  }
 
   final Offset offset;
   switch (direction.toLowerCase()) {
@@ -1573,8 +1642,17 @@ Future<void> _handleSwipe(WidgetTester tester, Map<String, dynamic> params) asyn
     default: throw 'Invalid swipe direction: "$direction". Use up, down, left, or right.';
   }
 
+  final positionBefore = scrollPosition?.pixels;
   await tester.drag(result.finder, offset);
   await tester.pumpAndSettle();
+  final positionAfter = scrollPosition?.pixels;
+
+  return {
+    'status': 'success',
+    'scrolled': positionBefore != positionAfter,
+    if (positionBefore != null) 'position_before': positionBefore,
+    if (positionAfter != null) 'position_after': positionAfter,
+  };
 }
 
 // ─── Wait For Gone ───────────────────────────────────────────────────────────

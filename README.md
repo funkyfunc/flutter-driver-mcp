@@ -131,7 +131,7 @@ Once your MCP client is connected, ask the agent to:
 | Tool | Description |
 |---|---|
 | `tap` | Taps, long-presses, or double-taps a widget. Set `gesture: "long_press"` or `gesture: "double"` to change behavior. Defaults to a normal tap. Automatically scrolls it into view first. |
-| `enter_text` | Enters text into a `TextField`. Supports finding fields by hint text via `semanticsLabel="Hint"`. Optionally sends a `TextInputAction` (e.g. `done`, `search`). |
+| `enter_text` | Enters text into a `TextField`. Supports finding fields by hint text via `semanticsLabel="Hint"`. Set `clearFirst: true` to explicitly clear the field before typing. Optionally sends a `TextInputAction` (e.g. `done`, `search`). |
 | `scroll` | Scrolls or swipes a widget. Use `dx`/`dy` for pixel-precise scrolling, or `direction` (`up`/`down`/`left`/`right`) + optional `distance` for named swipe gestures. |
 | `drag_and_drop` | Drags from a source widget to a destination widget or custom pixel offset. |
 | `scroll_until_visible` | Scrolls a scrollable container until a target widget appears. |
