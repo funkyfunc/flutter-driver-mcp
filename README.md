@@ -105,14 +105,15 @@ Add the following to your MCP client configuration:
 
 ### Quick start
 
-Once your MCP client is connected, ask the agent to:
+Once your MCP client is connected, just tell the agent what you want — it'll figure out the tools:
 
-1. **Launch** the app: `start_app({ project_path: "/path/to/app", device_id: "macos" })`
-2. **Explore** the UI: `explore_screen({})`
-3. **Interact**: `tap({ target: "text=\"Login\"" })`
-4. **Assert**: `assert({ check: "exists", target: "#home_screen" })`
-5. **Screenshot**: `screenshot({ type: "app" })`
-6. **Stop**: `stop_app({})`
+> *"Launch my app at `/path/to/my_app` on macOS and test the login flow"*
+
+> *"Explore the current screen and tap the Submit button"*
+
+> *"Take a screenshot and verify the home screen loaded"*
+
+The agent handles `start_app`, `explore_screen`, `tap`, `assert`, `screenshot`, etc. automatically. No need to spell out tool calls.
 
 ---
 

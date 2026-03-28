@@ -12,6 +12,7 @@ async function captureAppRenderScreenshot(savePath?: string) {
 	if (result.error) throw new Error(result.error);
 
 	if (savePath) {
+		await fs.mkdir(path.dirname(savePath), { recursive: true });
 		await fs.writeFile(savePath, Buffer.from(result.data, "base64"));
 		return textResponse(`Screenshot saved to ${savePath}`);
 	}
@@ -43,6 +44,7 @@ async function captureElementScreenshot(
 	if (result.error) throw new Error(result.error);
 
 	if (savePath) {
+		await fs.mkdir(path.dirname(savePath), { recursive: true });
 		await fs.writeFile(savePath, Buffer.from(result.data, "base64"));
 		return textResponse(`Element screenshot saved to ${savePath}`);
 	}
@@ -102,6 +104,7 @@ async function captureNativeDeviceScreenshot(
 	await fs.access(tempPath);
 
 	if (savePath) {
+		await fs.mkdir(path.dirname(savePath), { recursive: true });
 		await fs.copyFile(tempPath, savePath);
 		return textResponse(`Screenshot saved to ${savePath}`);
 	}

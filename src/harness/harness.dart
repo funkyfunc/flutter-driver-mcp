@@ -1252,6 +1252,11 @@ void _collectInteractiveSemantics(SemanticsNode node, List<Map<String, dynamic>>
   final data = node.getSemanticsData();
   final flagsCollection = data.flagsCollection;
   
+  final hasScrollAction = data.hasAction(SemanticsAction.scrollLeft) ||
+                          data.hasAction(SemanticsAction.scrollRight) ||
+                          data.hasAction(SemanticsAction.scrollUp) ||
+                          data.hasAction(SemanticsAction.scrollDown);
+
   final isInteractive = flagsCollection.isButton || 
                         flagsCollection.isTextField ||
                         flagsCollection.isLink ||
@@ -1259,7 +1264,8 @@ void _collectInteractiveSemantics(SemanticsNode node, List<Map<String, dynamic>>
                         data.hasAction(SemanticsAction.longPress) ||
                         data.hasAction(SemanticsAction.setText) ||
                         flagsCollection.isChecked != ui.CheckedState.none ||
-                        flagsCollection.isSlider;
+                        flagsCollection.isSlider ||
+                        hasScrollAction;
   
   if (isInteractive && !flagsCollection.isHidden) {
       final json = <String, dynamic>{
@@ -1278,12 +1284,17 @@ void _collectInteractiveSemantics(SemanticsNode node, List<Map<String, dynamic>>
       if (flagsCollection.isChecked == ui.CheckedState.isTrue) flags.add('isChecked');
       if (flagsCollection.isSelected == ui.Tristate.isTrue) flags.add('isSelected');
       if (flagsCollection.isSlider) flags.add('isSlider');
+      if (hasScrollAction) flags.add('isScrollable');
       if (flags.isNotEmpty) json['flags'] = flags;
 
       final actions = <String>[];
       if (data.hasAction(SemanticsAction.tap)) actions.add('tap');
       if (data.hasAction(SemanticsAction.longPress)) actions.add('longPress');
       if (data.hasAction(SemanticsAction.setText)) actions.add('setText');
+      if (data.hasAction(SemanticsAction.scrollLeft)) actions.add('scrollLeft');
+      if (data.hasAction(SemanticsAction.scrollRight)) actions.add('scrollRight');
+      if (data.hasAction(SemanticsAction.scrollUp)) actions.add('scrollUp');
+      if (data.hasAction(SemanticsAction.scrollDown)) actions.add('scrollDown');
       if (actions.isNotEmpty) json['actions'] = actions;
 
       collection.add(json);
