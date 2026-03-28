@@ -109,7 +109,7 @@ Once your MCP client is connected, just tell the agent what you want — it'll f
 
 > *"Launch my app at `/path/to/my_app` on macOS and test the login flow"*
 
-> *"Explore the current screen and tap the Submit button"*
+> *"Verify the account creation flow is working"*
 
 > *"Take a screenshot and verify the home screen loaded"*
 
@@ -154,7 +154,7 @@ The agent handles `start_app`, `explore_screen`, `tap`, `assert`, `screenshot`, 
 
 | Tool | Description |
 |---|---|
-| `assert` | Runs an assertion on a widget. Use `check` to specify the type: `exists`, `not_exists`, `text_equals` (with `expected`), `state` (with `stateKey` + `expected`), `visible`, or `enabled` (with `expected`). |
+| `assert` | Runs an assertion on a widget. Use `check` to specify the type: `exists`, `not_exists`, `text_equals` (with `expected`), `text_contains` (substring match with `expected`), `count` (with `expected` integer), `state` (with `stateKey` + `expected`), `visible`, or `enabled` (with `expected`). |
 
 ### Navigation & Environment
 
@@ -216,7 +216,7 @@ Use for **live UI** work — things a real user would do:
 - Launching the app on a device (`list_devices`, `start_app`)
 - Tapping, typing, scrolling, swiping, dragging (`tap` with `gesture`, `enter_text`, `scroll` with `direction`, `drag_and_drop`, `press_key`)
 - Checking what's on screen (`explore_screen`, `get_widget_tree`, `screenshot`, `get_text`)
-- Asserting UI state (`assert` with `check`: `exists`, `not_exists`, `text_equals`, `state`, `visible`, `enabled`)
+- Asserting UI state (`assert` with `check`: `exists`, `not_exists`, `text_equals`, `text_contains`, `count`, `state`, `visible`, `enabled`)
 - Mocking network responses (`intercept_network`)
 - Navigating (`navigate_to`, `go_back`, `get_current_route`)
 - Simulating environment (`simulate_background`, `set_network_status`)

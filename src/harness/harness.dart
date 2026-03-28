@@ -415,6 +415,12 @@ void main() {
               case 'text_equals':
                 result = await _handleAssertTextEquals(tester, params);
                 break;
+              case 'text_contains':
+                result = await _handleAssertTextContains(tester, params);
+                break;
+              case 'count':
+                result = await _handleAssertCount(tester, params);
+                break;
               case 'state':
                 result = await _handleAssertState(tester, params);
                 break;
@@ -980,6 +986,56 @@ Future<Map<String, dynamic>> _handleAssertTextEquals(WidgetTester tester, Map<St
   }
 }
 
+Future<Map<String, dynamic>> _handleAssertTextContains(WidgetTester tester, Map<String, dynamic> params) async {
+  final substring = params['expectedText'] as String?;
+  if (substring == null) throw 'expectedText is required';
+  
+  final result = await _resolveWidgetFinderWithWait(tester, params);
+  final element = result.elements.first;
+  
+  // Collect ALL text from the widget and its descendants
+  final allText = <String>[];
+  void collectText(Element el) {
+    final widget = el.widget;
+    if (widget is Text && widget.data != null) {
+      allText.add(widget.data!);
+    } else if (widget is EditableText) {
+      allText.add(widget.controller.text);
+    } else if (widget is RichText) {
+      allText.add(widget.text.toPlainText());
+    }
+    el.visitChildren(collectText);
+  }
+  collectText(element);
+  
+  final combinedText = allText.join('\n');
+  if (combinedText.contains(substring)) {
+    return {'success': true, 'matched_in': combinedText};
+  } else {
+    return {
+      'success': false,
+      'error': 'Text does not contain "$substring". Full text: "$combinedText"'
+    };
+  }
+}
+
+Future<Map<String, dynamic>> _handleAssertCount(WidgetTester tester, Map<String, dynamic> params) async {
+  final expectedCount = params['expected'] as int?;
+  if (expectedCount == null) throw 'expected (integer count) is required';
+  
+  final finder = _resolveLazyWidgetFinder(params);
+  final actualCount = finder.evaluate().length;
+  
+  if (actualCount == expectedCount) {
+    return {'success': true, 'count': actualCount};
+  } else {
+    return {
+      'success': false,
+      'error': 'Count mismatch. Expected: $expectedCount, Actual: $actualCount'
+    };
+  }
+}
+
 Future<Map<String, dynamic>> _handleAssertState(WidgetTester tester, Map<String, dynamic> params) async {
   final stateKey = params['stateKey'] as String?;
   final expectedValue = params['expectedValue'];
@@ -1155,6 +1211,12 @@ Future<Map<String, dynamic>> _handleBatchActions(
               break;
             case 'text_equals':
               result = await _handleAssertTextEquals(tester, args);
+              break;
+            case 'text_contains':
+              result = await _handleAssertTextContains(tester, args);
+              break;
+            case 'count':
+              result = await _handleAssertCount(tester, args);
               break;
             case 'state':
               result = await _handleAssertState(tester, args);

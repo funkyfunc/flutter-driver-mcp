@@ -298,7 +298,7 @@ export function registerTools(server: McpServer) {
 		"assert",
 		{
 			description:
-				"Runs an assertion check on a widget. Use 'check' to specify the type: exists, not_exists, text_equals, state, visible, or enabled.",
+				"Runs an assertion check on a widget. Use 'check' to specify the type: exists, not_exists, text_equals, text_contains, count, state, visible, or enabled.",
 			inputSchema: {
 				...targetShape,
 				check: z
@@ -306,16 +306,18 @@ export function registerTools(server: McpServer) {
 						"exists",
 						"not_exists",
 						"text_equals",
+						"text_contains",
+						"count",
 						"state",
 						"visible",
 						"enabled",
 					])
 					.describe("Type of assertion to perform"),
 				expected: z
-					.union([z.string(), z.boolean()])
+					.union([z.string(), z.boolean(), z.number()])
 					.optional()
 					.describe(
-						"Expected value. Required for text_equals (string) and enabled (boolean).",
+						"Expected value. Required for text_equals/text_contains (string), enabled (boolean), or count (integer).",
 					),
 				stateKey: z
 					.string()
@@ -329,7 +331,10 @@ export function registerTools(server: McpServer) {
 			const payload = resolveTargetArgs(args);
 			// Map 'expected' to the field names the harness expects
 			const check = payload.check as string;
-			if (check === "text_equals" && payload.expected !== undefined) {
+			if (
+				(check === "text_equals" || check === "text_contains") &&
+				payload.expected !== undefined
+			) {
 				payload.expectedText = payload.expected;
 				delete payload.expected;
 			}
