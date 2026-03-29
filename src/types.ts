@@ -4,7 +4,7 @@ import type { WebSocket } from "ws";
 // ─── Constants ───────────────────────────────────────────────────────────────
 
 export const RPC_TIMEOUT_MS = 30_000;
-export const APP_LAUNCH_TIMEOUT_MS = 180_000;
+export const APP_LAUNCH_TIMEOUT_MS = 300_000;
 export const GRACEFUL_STOP_TIMEOUT_MS = 5_000;
 export const MAX_LOG_LINES = 1_000;
 export const SCREENSHOT_DIR = "flutter_pilot_screenshots";

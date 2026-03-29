@@ -13,6 +13,15 @@ import {
 } from "../session.js";
 import { APP_LAUNCH_TIMEOUT_MS, type FlutterDaemonEvent } from "../types.js";
 
+// Tracks the most recent daemon output timestamp.
+// Used by waitForAppConnection to implement an activity-aware timeout:
+// the app only times out if the daemon goes silent (build stalled),
+// not simply because a slow Gradle build exceeded a fixed deadline.
+let lastDaemonActivityMs = Date.now();
+
+/** How long we tolerate silence from the daemon before giving up. */
+const IDLE_TIMEOUT_MS = 60_000;
+
 // ─── Pubspec Helpers ────────────────────────────────────────────────────────
 
 export async function readPackageName(
@@ -133,12 +142,14 @@ export function attachDaemonStreams(flutterProcess: Subprocess): void {
 		console.error(`[Flutter]: ${text}`);
 		appendLog(text);
 		processDaemonOutput(text);
+		lastDaemonActivityMs = Date.now();
 	});
 
 	flutterProcess.stderr?.on("data", (chunk: Buffer) => {
 		const text = chunk.toString();
 		console.error(`[Flutter Err]: ${text}`);
 		appendLog(text);
+		lastDaemonActivityMs = Date.now();
 	});
 
 	flutterProcess.on("exit", (code: number | null) => {
@@ -151,20 +162,66 @@ export async function waitForAppConnection(
 	flutterProcess: Subprocess,
 ): Promise<void> {
 	console.error("Waiting for app to connect...");
+	lastDaemonActivityMs = Date.now();
+
 	return new Promise<void>((resolve, reject) => {
 		setAppConnectedResolver(resolve);
+		let settled = false;
 
-		const timeout = setTimeout(
-			() => reject(new Error("Timeout waiting for app to start")),
-			APP_LAUNCH_TIMEOUT_MS,
-		);
+		// Hard ceiling: even with continuous activity, give up after this.
+		const hardTimeout = setTimeout(() => {
+			if (settled) return;
+			settled = true;
+			reject(
+				new Error(
+					`Timeout waiting for app to start (exceeded ${APP_LAUNCH_TIMEOUT_MS / 1000}s hard limit). ` +
+						"The build may be stuck. Check the Flutter/Gradle output above for errors.",
+				),
+			);
+		}, APP_LAUNCH_TIMEOUT_MS);
+
+		// Soft (activity-aware) timeout: polls every 5s and rejects only
+		// if the daemon has been completely silent for IDLE_TIMEOUT_MS.
+		// This lets slow-but-progressing Android Gradle builds continue
+		// without hitting the hard ceiling.
+		const activityPoll = setInterval(() => {
+			if (settled) {
+				clearInterval(activityPoll);
+				return;
+			}
+			const silenceMs = Date.now() - lastDaemonActivityMs;
+			if (silenceMs >= IDLE_TIMEOUT_MS) {
+				settled = true;
+				clearTimeout(hardTimeout);
+				clearInterval(activityPoll);
+				reject(
+					new Error(
+						`Timeout waiting for app to start — no output from Flutter for ${Math.round(silenceMs / 1000)}s. ` +
+							"The build appears stalled. Check device connectivity and Gradle/Xcode logs.",
+					),
+				);
+			}
+		}, 5_000);
 
 		flutterProcess.on("exit", (code: number | null) => {
+			if (settled) return;
 			if (code !== null && code !== 0) {
-				clearTimeout(timeout);
+				settled = true;
+				clearTimeout(hardTimeout);
+				clearInterval(activityPoll);
 				const recentOutput = recentDaemonLogs.slice(-20).join("\n");
 				reject(new Error(`Build failed (exit code ${code}):\n${recentOutput}`));
 			}
+		});
+
+		// Clean up the interval when resolved (app connected successfully)
+		const originalResolve = resolve;
+		setAppConnectedResolver(() => {
+			if (settled) return;
+			settled = true;
+			clearTimeout(hardTimeout);
+			clearInterval(activityPoll);
+			originalResolve();
 		});
 	});
 }
