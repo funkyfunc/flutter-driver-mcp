@@ -110,6 +110,7 @@ export function registerTools(server: McpServer) {
 		{
 			description:
 				"Starts recording the screen of the running app's device. " +
+				"Recording begins capturing immediately with no warmup delay — proceed with interactions right away. " +
 				"Supports iOS Simulators (MP4), macOS Desktop (MOV), and Android devices/emulators (MP4, max 180s). " +
 				"Only one recording at a time. Auto-stops if stop_app is called or after 5 minutes.",
 			inputSchema: {

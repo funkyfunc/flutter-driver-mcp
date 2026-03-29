@@ -306,8 +306,9 @@ export async function handleStartRecording(args: { save_path?: string }) {
 			: "";
 
 	return textResponse(
-		`Recording started on ${platformLabel}.${durationNote} ` +
-			`Output will be saved to: ${outputPath}. ` +
+		`Recording started on ${platformLabel} — frames are being captured now.${durationNote} ` +
+			`Proceed with your interactions immediately; there is no warmup delay. ` +
+			`Output: ${outputPath}. ` +
 			`Call stop_recording when done, or stop_app to auto-finalize.`,
 	);
 }
