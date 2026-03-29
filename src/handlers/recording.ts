@@ -151,36 +151,68 @@ function spawnIOSRecording(
 		["simctl", "io", deviceId, "recordVideo", "--mask=black", outputPath],
 		{ stdio: "pipe" },
 	);
-	proc.catch(() => { }); // Prevent unhandled rejection on kill
+	proc.catch(() => {}); // Prevent unhandled rejection on kill
 	return proc;
 }
 
-function spawnMacOSRecording(
+/**
+ * Spawns a macOS screen recording process targeting a specific window.
+ *
+ * IMPORTANT: execa() returns a Subprocess that is both a ChildProcess AND a
+ * thenable (Promise). If returned directly from a `.then()` callback or even
+ * an `async` function, JavaScript's Promise resolution will unwrap the thenable
+ * and wait for the process to exit — blocking the caller forever. We avoid this
+ * by looking up the window ID first, THEN spawning the process and returning it
+ * from a synchronous wrapper that is not inside a `.then()` chain.
+ */
+async function spawnMacOSRecording(
 	flutterProcess: Subprocess,
 	outputPath: string,
 ): Promise<RecordingProcess> {
-	return getMacOSWindowId(flutterProcess).then((windowId): RecordingProcess => {
-		if (windowId) {
-			console.error(
-				`Starting macOS window recording (Window ID: ${windowId}): screencapture -l${windowId} -v ${outputPath}`,
-			);
-			const proc = execa("screencapture", [`-l${windowId}`, "-v", outputPath], {
-				stdio: "pipe",
-			});
-			proc.catch(() => { }); // Prevent unhandled rejection on kill
-			return proc;
-		}
+	const windowId = await getMacOSWindowId(flutterProcess);
 
+	let proc: RecordingProcess;
+
+	if (windowId) {
+		console.error(
+			`Starting macOS window recording (Window ID: ${windowId}): screencapture -l${windowId} -v ${outputPath}`,
+		);
+		const subprocess = execa(
+			"screencapture",
+			[`-l${windowId}`, "-v", outputPath],
+			{
+				stdio: "pipe",
+			},
+		);
+		subprocess.catch(() => {}); // Prevent unhandled rejection on kill
+		proc = subprocess;
+	} else {
 		// Fallback: full-screen recording
 		console.error(
 			`macOS Window ID not found, falling back to full-screen recording: screencapture -v ${outputPath}`,
 		);
-		const proc = execa("screencapture", ["-v", outputPath], {
+		const subprocess = execa("screencapture", ["-v", outputPath], {
 			stdio: "pipe",
 		});
-		proc.catch(() => { }); // Prevent unhandled rejection on kill
-		return proc;
-	});
+		subprocess.catch(() => {}); // Prevent unhandled rejection on kill
+		proc = subprocess;
+	}
+
+	// Return a plain-object wrapper to prevent Promise resolution from
+	// unwrapping the thenable execa Subprocess.
+	return {
+		kill: (signal) => proc.kill(signal),
+		get pid() {
+			return proc.pid;
+		},
+		get exitCode() {
+			return proc.exitCode;
+		},
+		on: (event, listener) => {
+			proc.on(event, listener);
+			return proc;
+		},
+	} as RecordingProcess;
 }
 
 function spawnAndroidRecording(deviceId: string): RecordingProcess {
@@ -192,7 +224,7 @@ function spawnAndroidRecording(deviceId: string): RecordingProcess {
 		["-s", deviceId, "shell", "screenrecord", ANDROID_DEVICE_RECORDING_PATH],
 		{ stdio: "pipe" },
 	);
-	proc.catch(() => { }); // Prevent unhandled rejection on kill
+	proc.catch(() => {}); // Prevent unhandled rejection on kill
 	return proc;
 }
 
@@ -204,14 +236,14 @@ export async function handleStartRecording(args: { save_path?: string }) {
 	if (activeRecording) {
 		throw new Error(
 			"A recording is already in progress. Call stop_recording first to finalize the current recording, " +
-			"or call stop_app which will automatically save the recording before stopping.",
+				"or call stop_app which will automatically save the recording before stopping.",
 		);
 	}
 
 	if (!session.deviceId) {
 		throw new Error(
 			"Cannot determine the target device. The app session has no device ID. " +
-			"Try stopping and restarting the app with an explicit device_id.",
+				"Try stopping and restarting the app with an explicit device_id.",
 		);
 	}
 
@@ -219,7 +251,7 @@ export async function handleStartRecording(args: { save_path?: string }) {
 	if (!platform) {
 		throw new Error(
 			`Screen recording is not supported for device '${session.deviceId}'. ` +
-			"Supported targets: iOS Simulator (UUID), macOS Desktop ('macos'), Android emulator/device.",
+				"Supported targets: iOS Simulator (UUID), macOS Desktop ('macos'), Android emulator/device.",
 		);
 	}
 
@@ -275,8 +307,8 @@ export async function handleStartRecording(args: { save_path?: string }) {
 
 	return textResponse(
 		`Recording started on ${platformLabel}.${durationNote} ` +
-		`Output will be saved to: ${outputPath}. ` +
-		`Call stop_recording when done, or stop_app to auto-finalize.`,
+			`Output will be saved to: ${outputPath}. ` +
+			`Call stop_recording when done, or stop_app to auto-finalize.`,
 	);
 }
 
@@ -344,8 +376,8 @@ async function finalizeRecording(
 		setActiveRecording(null);
 		throw new Error(
 			`Recording file was not created at ${recording.outputPath}. ` +
-			"The recording process may have failed. Check that the target device is still running " +
-			"and that you have the necessary permissions (macOS: System Settings → Privacy → Screen Recording).",
+				"The recording process may have failed. Check that the target device is still running " +
+				"and that you have the necessary permissions (macOS: System Settings → Privacy → Screen Recording).",
 		);
 	}
 
@@ -353,9 +385,9 @@ async function finalizeRecording(
 		setActiveRecording(null);
 		throw new Error(
 			`Recording file at ${recording.outputPath} is empty (0 bytes). ` +
-			"This usually means the recording was stopped before any frames were captured, " +
-			"or on macOS, the terminal lacks Screen Recording permission. " +
-			"Check System Settings → Privacy & Security → Screen Recording.",
+				"This usually means the recording was stopped before any frames were captured, " +
+				"or on macOS, the terminal lacks Screen Recording permission. " +
+				"Check System Settings → Privacy & Security → Screen Recording.",
 		);
 	}
 
@@ -421,9 +453,9 @@ async function pullAndroidRecording(
 	} catch (err) {
 		throw new Error(
 			`Failed to pull recording from Android device: ${toExecErrorMessage(err)}. ` +
-			"The recording file may still exist on the device at " +
-			`${ANDROID_DEVICE_RECORDING_PATH}. You can pull it manually with: ` +
-			`adb -s ${deviceId} pull ${ANDROID_DEVICE_RECORDING_PATH} .`,
+				"The recording file may still exist on the device at " +
+				`${ANDROID_DEVICE_RECORDING_PATH}. You can pull it manually with: ` +
+				`adb -s ${deviceId} pull ${ANDROID_DEVICE_RECORDING_PATH} .`,
 		);
 	}
 
