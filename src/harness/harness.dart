@@ -284,7 +284,13 @@ void main() {
   testWidgets('MCP Pilot Harness', (WidgetTester tester) async {
     // INJECT_MAIN
     
-    // Wait for the app to settle initially
+    // Wait for the Flutter engine to rasterize its first frame.
+    // This is a proper signal from the framework — it replaces arbitrary
+    // delays and prevents the 'debugFrameWasSentToEngine' assertion on
+    // Android, where the engine may not be ready immediately after main().
+    // With fullyLive frame policy, the first frame renders through the
+    // real platform vsync without needing manual tester.pump() calls.
+    await tester.binding.waitUntilFirstFrameRasterized;
     await tester.pumpAndSettle();
 
     // Enable semantics globally so bySemanticsLabel finders always work
