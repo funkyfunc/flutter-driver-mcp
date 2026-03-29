@@ -4,6 +4,8 @@ An [MCP server](https://modelcontextprotocol.io) that lets AI agents **see, tap,
 
 Flutter Driver MCP bridges your LLM (Claude, Gemini, etc.) to a running Flutter application via Flutter's test framework + WebSocket, giving the agent full interactive control of the UI.
 
+**Now with screen recording!** Record your app sessions as native video files (MP4/MOV) on iOS Simulators, macOS Desktop, and Android devices.
+
 ---
 
 ## 💡 Why Flutter Driver MCP?
@@ -22,7 +24,7 @@ Flutter Driver MCP bridges your LLM (Claude, Gemini, etc.) to a running Flutter 
 
 | Category | Tools |
 |---|---|
-| **Lifecycle** | `start_app` · `stop_app` · `pilot_hot_restart` · `list_devices` |
+| **Lifecycle** | `start_app` · `stop_app` · `pilot_hot_restart` · `list_devices` · `start_recording` · `stop_recording` |
 | **Interaction** | `tap` · `enter_text` · `scroll` · `drag_and_drop` · `scroll_until_visible` · `wait_for` · `press_key` |
 | **Inspection** | `get_widget_tree` · `get_accessibility_tree` · `explore_screen` · `get_text` · `screenshot` |
 | **Assertions** | `assert` |
@@ -87,15 +89,22 @@ npm install -g flutter-driver-mcp
 
 ## 🚀 Usage
 
-### Add to your MCP client config
+### Claude Code
 
-Use `npx -y flutter-driver-mcp` to run the server.
+To add this server to [Claude Code](https://docs.anthropic.com/en/docs/agents-and-tools/claude-code), run:
+
+```bash
+claude mcp add flutter-driver -- npx -y flutter-driver-mcp
+```
+
+### Other MCP clients (Desktop, IDEs, etc.)
 
 Add the following to your MCP client configuration:
+
 ```json
 {
   "mcpServers": {
-    "flutter-driver-mcp": {
+    "flutter-driver": {
       "command": "npx",
       "args": ["-y", "flutter-driver-mcp"]
     }
@@ -124,9 +133,11 @@ The agent handles `start_app`, `explore_screen`, `tap`, `assert`, `screenshot`, 
 | Tool | Description |
 |---|---|
 | `start_app` | Injects the harness, launches the app via `flutter run`, and connects over WebSocket. Surfaces actual build errors (compiler messages, Xcode failures) instead of generic timeouts. |
-| `stop_app` | Gracefully sends `app.stop` to the Flutter daemon, kills processes, and cleans up. |
+| `stop_app` | Gracefully sends `app.stop` to the Flutter daemon, kills processes, and cleans up. Auto-stops any active recording. |
 | `pilot_hot_restart` | Sends a full restart command to the running app (preserves session). |
 | `list_devices` | Lists available Flutter devices (simulators, emulators, physical, desktop). No running app required. |
+| `start_recording` | Starts recording the screen of the running app's device. Supports iOS Simulators (MP4), macOS Desktop (MOV), and Android (MP4, max 180s). Auto-stops after 5 minutes or on `stop_app`. |
+| `stop_recording` | Stops the current recording and finalizes the video file. Returns the file path, format, duration, and size. Called automatically by `stop_app` if a recording is active. |
 
 ### Interaction
 

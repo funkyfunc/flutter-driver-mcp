@@ -10,6 +10,10 @@ import {
 	handleStartApp,
 	handleStopApp,
 } from "./handlers/lifecycle.js";
+import {
+	handleStartRecording,
+	handleStopRecording,
+} from "./handlers/recording.js";
 import { handleScreenshot } from "./handlers/screenshot.js";
 import { sendRpc } from "./infra/rpc.js";
 import { recentDaemonLogs } from "./session.js";
@@ -99,6 +103,36 @@ export function registerTools(server: McpServer) {
 				"Lists available Flutter devices. Does NOT require a running app.",
 		},
 		handleListDevices,
+	);
+
+	server.registerTool(
+		"start_recording",
+		{
+			description:
+				"Starts recording the screen of the running app's device. " +
+				"Supports iOS Simulators (MP4), macOS Desktop (MOV), and Android devices/emulators (MP4, max 180s). " +
+				"Only one recording at a time. Auto-stops if stop_app is called or after 5 minutes.",
+			inputSchema: {
+				save_path: z
+					.string()
+					.optional()
+					.describe(
+						"Optional absolute path to save the recording file. If not provided, saves to a temp directory.",
+					),
+			},
+		},
+		handleStartRecording,
+	);
+
+	server.registerTool(
+		"stop_recording",
+		{
+			description:
+				"Stops the current screen recording and finalizes the video file. " +
+				"Returns the file path, format, duration, and file size. " +
+				"Called automatically by stop_app if a recording is active.",
+		},
+		handleStopRecording,
 	);
 
 	// ── Interaction ───────────────────────────────────────────────────────────

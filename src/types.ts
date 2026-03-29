@@ -8,6 +8,8 @@ export const APP_LAUNCH_TIMEOUT_MS = 180_000;
 export const GRACEFUL_STOP_TIMEOUT_MS = 5_000;
 export const MAX_LOG_LINES = 1_000;
 export const SCREENSHOT_DIR = "flutter_pilot_screenshots";
+export const RECORDING_DIR = "flutter_pilot_recordings";
+export const MAX_RECORDING_DURATION_MS = 300_000; // 5-minute auto-stop safety limit
 
 // ─── Widget Finder Types ─────────────────────────────────────────────────────
 
@@ -101,6 +103,26 @@ export interface AppSession {
 	observatoryUri: string | null;
 	projectPath: string;
 	deviceId: string | null;
+}
+
+// ─── Recording State ────────────────────────────────────────────────────────
+
+/** Minimal process interface needed for recording lifecycle management. */
+export interface RecordingProcess {
+	kill(signal?: NodeJS.Signals): boolean;
+	readonly pid?: number;
+	readonly exitCode?: number | null;
+	on(event: "exit", listener: (code: number | null) => void): this;
+}
+
+export interface ActiveRecording {
+	process: RecordingProcess;
+	outputPath: string;
+	format: "mp4" | "mov";
+	platform: "ios" | "macos" | "android";
+	startedAt: number;
+	autoStopTimer: ReturnType<typeof setTimeout>;
+	deviceId: string;
 }
 
 // ─── Tool Handler ───────────────────────────────────────────────────────────

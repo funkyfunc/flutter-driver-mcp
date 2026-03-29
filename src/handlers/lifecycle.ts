@@ -23,6 +23,7 @@ import {
 	SCREENSHOT_DIR,
 } from "../types.js";
 import { textResponse } from "../utils.js";
+import { stopActiveRecordingIfRunning } from "./recording.js";
 
 export async function handleStartApp(args: {
 	project_path: string;
@@ -62,6 +63,10 @@ export async function handleStartApp(args: {
 }
 
 export async function handleStopApp() {
+	// Auto-finalize any active recording before tearing down the session.
+	// This ensures recordings are saved even if the agent forgets to call stop_recording.
+	await stopActiveRecordingIfRunning();
+
 	if (activeAppSession?.appId) {
 		try {
 			writeDaemonCommand("app.stop", { appId: activeAppSession.appId });
@@ -81,7 +86,7 @@ export async function handleStopApp() {
 	if (activeAppSession) {
 		try {
 			activeAppSession.process.kill("SIGKILL");
-		} catch {}
+		} catch { }
 	}
 	activeAppSession?.ws?.close();
 
@@ -96,7 +101,7 @@ export async function handleStopApp() {
 	const tempDir = path.join(os.tmpdir(), SCREENSHOT_DIR);
 	try {
 		await fs.rm(tempDir, { recursive: true, force: true });
-	} catch {}
+	} catch { }
 
 	return textResponse("App stopped.");
 }
@@ -147,6 +152,6 @@ export async function handleListDevices() {
 
 	return textResponse(
 		`Found ${devices.length} device(s):\\n${summary}\\n\\n` +
-			"Use the device ID (e.g. 'macos', 'chrome', or a simulator UUID) with start_app.",
+		"Use the device ID (e.g. 'macos', 'chrome', or a simulator UUID) with start_app.",
 	);
 }

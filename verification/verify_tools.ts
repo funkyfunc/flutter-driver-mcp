@@ -69,6 +69,8 @@ const EXPECTED_TOOLS = [
 	"stop_app",
 	"pilot_hot_restart",
 	"list_devices",
+	"start_recording",
+	"stop_recording",
 	"tap",
 	"enter_text",
 	"scroll",
@@ -166,6 +168,14 @@ async function main(): Promise<void> {
 	const screenshotTool = tools.find((t: McpTool) => t.name === "screenshot");
 	if (!screenshotTool?.inputSchema?.properties?.target) {
 		console.error("❌ screenshot tool missing 'target' property");
+		passed = false;
+	}
+
+	const startRecordingTool = tools.find(
+		(t: McpTool) => t.name === "start_recording",
+	);
+	if (!startRecordingTool?.inputSchema?.properties?.save_path) {
+		console.error("❌ start_recording tool missing 'save_path' property");
 		passed = false;
 	}
 
